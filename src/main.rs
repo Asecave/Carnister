@@ -11,15 +11,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let api_key = env::var("YOUTUBE_API_KEY").expect("Specify a Youtube API key");
     let playlist_id = "PLP9X6Hp3ZLpOsDk3AudxA5FueNmcrQTLr";
 
+    println!("Fetching videos from playlist...");
+
     let videos = fetch_videos(&api_key, playlist_id).await.expect("Error while fetching videos");
 
-    for video in videos {
-        let id = &video["snippet"]["resourceId"]["videoId"];
-        let title = &video["snippet"]["title"];
-        let upload_channel = &video["snippet"]["videoOwnerChannelTitle"];
-        let upload_date = &video["snippet"]["publishedAt"];
-        println!("{}, {}, {}, {}", id, title, upload_channel, upload_date);
+    struct Song {
+        artist: String,
+        title: String,
+        release_year: i32,
+        video_id: String,
     }
+
+    let songs: Vec<Song> = Vec::new();
+
+    for video in videos {
+        let id = video["snippet"]["resourceId"]["videoId"].to_string();
+        let raw_title = video["snippet"]["title"].to_string();
+        let upload_channel = video["snippet"]["videoOwnerChannelTitle"].to_string();
+        let upload_date = video["snippet"]["publishedAt"].to_string();
+
+        let title;
+        let artist;
+
+        if raw_title.find(" - ") == None {
+            artist = upload_channel.replace(" - Topic", "");
+            title = raw_title;
+
+        } else {
+            let mut split_title = raw_title.split(" - ");
+            artist = split_title.next().expect("How could he find it in the first place?").to_string();
+            title = split_title.next().expect("How could he find it in the first place?").to_string();
+        }
+
+        println!("{}, {}, {}, {}", &id, &title, &artist, &upload_date);
+    }
+
+
 
     Ok(())
 }
