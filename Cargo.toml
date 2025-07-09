@@ -4,9 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = "0.4.41"
 colored = "3.0.0"
 dotenv = "0.15.0"
+env_logger = "0.11.8"
 indicatif = "0.18.0"
+indicatif-log-bridge = "0.2.3"
+log = "0.4.27"
 regex = "1.11.1"
 reqwest = {version = "0.12.22", features = ["json"]}
 serde_json = "1.0.140"

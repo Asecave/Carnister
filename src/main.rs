@@ -1,12 +1,16 @@
 
 use core::fmt;
-use std::{env, error::Error, fmt::Write, time::Duration};
+use std::{env, error::Error, time::Duration};
 use colored::Colorize;
 use dotenv::dotenv;
-use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use env_logger::{Builder, Env};
+use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
+use indicatif_log_bridge::LogWrapper;
+use log::{info, warn};
 use regex::Regex;
 use reqwest::{header::{HeaderValue, USER_AGENT}, Client, Url};
 use serde_json::Value;
+use std::io::Write;
 
 struct Song {
     artist: String,
@@ -25,10 +29,34 @@ impl fmt::Display for Song {
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
 
+    let logger = 
+        Builder::from_env(Env::default().default_filter_or("info"))
+        .format(|buf, record| {
+
+            let level = match record.level() {
+                log::Level::Info  => "INFO ".green(),
+                log::Level::Warn  => "WARN ".yellow(),
+                log::Level::Error => "ERROR".red(),
+                log::Level::Debug => "DEBUG".blue(),
+                log::Level::Trace => "TRACE".blue(),
+            };
+
+            let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+            writeln!(buf, "{}{} {}{} {}", "[".truecolor(150, 150, 150), timestamp.truecolor(150, 150, 150), level, "]".truecolor(150, 150, 150), record.args())
+        })
+        .build();
+    let level = logger.filter();
+    let multi = MultiProgress::new();
+
+    LogWrapper::new(multi.clone(), logger)
+        .try_init()
+        .unwrap();
+    log::set_max_level(level);
+
     let api_key = env::var("YOUTUBE_API_KEY").expect("Specify a Youtube API key");
     let playlist_id = "PLP9X6Hp3ZLpOsDk3AudxA5FueNmcrQTLr";
 
-    println!("Fetching videos from playlist...");
+    info!("Fetching videos from playlist...");
 
     let videos = fetch_videos(&api_key, playlist_id).await.expect("Error while fetching videos");
 
@@ -37,14 +65,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let client = Client::new();
     let timeout = 1050;
 
-    let pb = ProgressBar::new(videos.len() as u64);
+    info!("Setting request delay to {}ms to not get rate limited by MusicBrainz (they accept around 1 request per second)", timeout);
+    info!("Receiving data...");
+
+    let pb = multi.add(ProgressBar::new(videos.len() as u64));
     pb.set_style(ProgressStyle::with_template("[{elapsed_precise}] [{wide_bar:.cyan/black}] {pos:>7}/{len:7} ({eta})")
         .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+        .with_key("eta", |state: &ProgressState, w: &mut dyn fmt::Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
         .progress_chars("=>-"));
-
-    println!("Setting request delay to {}ms to not get rate limited by MusicBrainz (they accept around 1 request per second)", timeout);
-    println!("Receiving data...");
 
     let mut progress_bar_pos = 0;
 
@@ -81,7 +109,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let year = match get_music_braiz_year(&client, &artist, &title).await {
             Ok(year) => year,
             Err(_) => {
-                println!("{} {} - {}, {}", "Song not found.".red(), artist.red(), title.red(), "Skipping for now.".red());
+                warn!("{} {} - {}, {}", "Song not found.".red(), artist.red(), title.red(), "Skipping for now.".red());
                 skipped.push(Song{artist, title, release_year: upload_date, video_id: id});
                 continue;
             }
@@ -129,7 +157,7 @@ async fn get_music_braiz_year(client: &Client, artist: &str, title: &str) -> Res
 
     let url = format!("https://musicbrainz.org/ws/2/recording?query=recording:\"{}\" AND artist:\"{}\"&fmt=json", &title, &artist);
 
-    println!("{} {}", "Getting".truecolor(100, 100, 100), &url.truecolor(100, 100, 100));
+    info!("{} {} {} {}", "Getting".truecolor(100, 100, 100), artist.truecolor(100, 100, 100), "-".truecolor(100, 100, 100), title.truecolor(100, 100, 100));
 
     let json = receive_json(client, &url).await.unwrap();
     let result_count = json["recordings"].as_array().unwrap().len();
@@ -150,7 +178,7 @@ async fn get_music_braiz_year(client: &Client, artist: &str, title: &str) -> Res
     };
 
     let artists: Vec<String> = json["recordings"][0]["artist-credit"].as_array().unwrap().iter().map(|val| val["name"].to_string()).collect();
-    println!("{} {} - {}", "Found:".green(), artists.iter().fold("".to_string(), |a, b| a + ", " + b).split_off(2), json["recordings"][0]["title"]);
+    info!("{} {} - {}", "Found:".green(), artists.iter().fold("".to_string(), |a, b| a + ", " + b).split_off(2), json["recordings"][0]["title"]);
 
     date.truncate(first_dash);
 
