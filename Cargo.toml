@@ -14,5 +14,6 @@ log = "0.4.27"
 regex = "1.11.1"
 reqwest = {version = "0.12.22", features = ["json"]}
 serde_json = "1.0.140"
+text_io = "0.1.13"
 tokio = { version = "1.46.1", features = ["full"] }
 

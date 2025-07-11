@@ -1,15 +1,16 @@
 
 use core::fmt;
-use std::{env, error::Error, time::Duration};
+use std::{env, error::Error, string, time::Duration};
 use colored::Colorize;
 use dotenv::dotenv;
 use env_logger::{Builder, Env};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
-use log::{info, warn};
+use log::*;
 use regex::Regex;
 use reqwest::{header::{HeaderValue, USER_AGENT}, Client, Url};
 use serde_json::Value;
+use text_io::read;
 use std::io::Write;
 
 struct Song {
@@ -17,11 +18,12 @@ struct Song {
     title: String,
     release_year: i32,
     video_id: String,
+    raw_title: String,
 }
 
 impl fmt::Display for Song {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}, {}, {}, {}", self.artist, self.title, self.release_year, self.video_id)
+        write!(f, "{}, {}, {}, {}, {}", self.artist, self.title, self.release_year, self.video_id, self.raw_title)
     }
 }
 
@@ -77,14 +79,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut progress_bar_pos = 0;
 
     for video in videos {
-
+        
         pb.set_position(progress_bar_pos);
         progress_bar_pos += 1;
 
-        let id = video["snippet"]["resourceId"]["videoId"].to_string().trim_matches('\"').to_string();
+        if progress_bar_pos < 17 {
+            continue;
+        }
+        
+        let id = video["contentDetails"]["videoId"].to_string().trim_matches('\"').to_string();
         let raw_title = video["snippet"]["title"].to_string().trim_matches('\"').to_string();
         let upload_channel = video["snippet"]["videoOwnerChannelTitle"].to_string().trim_matches('\"').to_string();
-        let raw_upload_date = video["snippet"]["publishedAt"].to_string().trim_matches('\"').to_string();
+        let raw_upload_date = video["contentDetails"]["videoPublishedAt"].to_string().trim_matches('\"').to_string();
 
         
         let title;
@@ -96,11 +102,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         upload_date = tmp_upload_date.parse::<i32>().unwrap();
 
         if raw_title.find(" - ") == None {
-            artist = upload_channel.replace(" - Topic", "");
+            artist = clean_artist(&upload_channel.replace(" - Topic", ""));
             title = clean_title(&raw_title);
         } else {
             let split_title: Vec<&str> = raw_title.split(" - ").collect();
-            artist = split_title[0].to_string();
+            artist = clean_artist(&split_title[0].to_string());
             title = clean_title(&split_title[1].to_string());
         }
 
@@ -110,19 +116,77 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok(year) => year,
             Err(_) => {
                 warn!("{} {} - {}, {}", "Song not found.".red(), artist.red(), title.red(), "Skipping for now.".red());
-                skipped.push(Song{artist, title, release_year: upload_date, video_id: id});
+                skipped.push(Song{artist, title, release_year: upload_date, video_id: id, raw_title});
                 continue;
             }
         };
 
-        let song = Song{artist, title, release_year: year, video_id: id};
+        let song = Song{artist, title, release_year: year, video_id: id, raw_title};
 
         songs.push(song);
+
+        if progress_bar_pos >= 22 {
+            break;
+        }// rmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
     }
 
     pb.finish_with_message("All data received.");
+    multi.remove(&pb);
+
+    info!("Revisiting songs that need manual intervention.");
+    println!();
+
+    let mut action_for_all = -1;
+
+    for mut song in skipped {
+        println!("{} {}", "Youtube title: ", song.raw_title.bright_green());
+        println!("{} {} - {}", "Queried title: ", song.artist.bright_green(), song.title.bright_green());
+        println!();
+        println!("Actions:");
+        println!("{} {}", "1".blue(), "Use YouTube upload date".cyan());
+        println!("{} {}", "2".blue(), "Manually set release year".cyan());
+        println!("{} {}", "3".blue(), "Edit song name for database query".cyan());
+        println!("{} {}", "4".blue(), "Use YouTube upload date for all remaining".cyan());
+        println!("{} {}", "5".blue(), "Manually set release year for all remaining".cyan());
+        println!();
+        println!("Enter number:");
+        let input;
+        if action_for_all == -1 {
+            input = input_num(1, 5);
+            if input == 4 {action_for_all = 1}
+            if input == 5 {action_for_all = 2}
+        } else {
+            input = action_for_all;
+        }
+
+        match input {
+            1 => (),
+            2 => {
+                println!("Enter year for {}:", song.raw_title.bright_green());
+                song.release_year = input_num(i32::MIN, i32::MAX);
+            },
+            3 => (),
+            _ => return Err("unknown input".into()),
+        }
+        println!("Using {} for {}", song.release_year.to_string().green(), song.raw_title.cyan());
+    }
 
     Ok(())
+}
+
+fn input_num(range_min: i32, range_max: i32) -> i32 {
+    loop {
+        print!("{}", "==> ".green());
+        let raw_input: String = read!();
+        match raw_input.parse::<i32>() {
+            Ok(i) => {
+                if i >= range_min && i <= range_max {
+                    return i;
+                }
+            },
+            Err(_) => ()
+        };
+    }
 }
 
 async fn fetch_videos(api_key: &str, playlist_id: &str) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
@@ -133,7 +197,7 @@ async fn fetch_videos(api_key: &str, playlist_id: &str) -> Result<Vec<Value>, Bo
     loop {
         
         let url = format!(
-            "https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId={}&pageToken={}&key={}",
+            "https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet&part=contentDetails&maxResults=50&playlistId={}&pageToken={}&key={}",
             playlist_id, page_token, api_key
         );
 
@@ -208,6 +272,15 @@ async fn receive_json(client: &Client, url: &str) -> Result<Value, Box<dyn std::
     Ok(json)
 }
 
+fn clean_artist(input: &String) -> String {
+    let bracket_re = Regex::new(r"\[.*?\]").unwrap();
+    let mut temp = bracket_re.replace_all(&input, "").trim().to_string();
+    if let Some(index) = temp.find("-").or(temp.find("|")) {
+        temp = temp.split_off(index);
+    }
+    temp.trim().to_string()
+}
+
 fn clean_title(input: &String) -> String {
     let bracket_re = Regex::new(r"\[.*?\]").unwrap();
     let remix_re = Regex::new(r"\([^)]*\)").unwrap();
@@ -216,7 +289,7 @@ fn clean_title(input: &String) -> String {
     let temp = remix_re
         .replace_all(&temp, |caps: &regex::Captures| {
             let content = &caps[0].to_lowercase();
-            if content.contains("remix") || content.contains("edit") {
+            if content.contains("remix") || content.contains("edit") || content.contains("vip") {
                 caps[0].to_string()
             } else {
                 "".to_string()
