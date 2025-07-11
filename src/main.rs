@@ -1,6 +1,6 @@
 
 use core::fmt;
-use std::{env, error::Error, string, time::Duration};
+use std::{env, error::Error, time::Duration};
 use colored::Colorize;
 use dotenv::dotenv;
 use env_logger::{Builder, Env};
@@ -139,45 +139,73 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut action_for_all = -1;
 
     for mut song in skipped {
-        println!("{} {}", "Youtube title: ", song.raw_title.bright_green());
-        println!("{} {} - {}", "Queried title: ", song.artist.bright_green(), song.title.bright_green());
-        println!();
-        println!("Actions:");
-        println!("{} {}", "1".blue(), "Use YouTube upload date".cyan());
-        println!("{} {}", "2".blue(), "Manually set release year".cyan());
-        println!("{} {}", "3".blue(), "Edit song name for database query".cyan());
-        println!("{} {}", "4".blue(), "Use YouTube upload date for all remaining".cyan());
-        println!("{} {}", "5".blue(), "Manually set release year for all remaining".cyan());
-        println!();
-        println!("Enter number:");
-        let input;
-        if action_for_all == -1 {
-            input = input_num(1, 5);
-            if input == 4 {action_for_all = 1}
-            if input == 5 {action_for_all = 2}
-        } else {
-            input = action_for_all;
-        }
+        loop {
+            if action_for_all == -1 {
+                println!();
+                println!("{} {}", "Youtube title: ", song.raw_title.bright_green());
+                println!("{} {} - {}", "Queried title: ", song.artist.bright_green(), song.title.bright_green());
+                println!();
+                println!("Actions:");
+                println!("{} {}", "1".blue(), "Use YouTube upload date".cyan());
+                println!("{} {}", "2".blue(), "Manually set release year".cyan());
+                println!("{} {}", "3".blue(), "Edit song name for database query".cyan());
+                println!("{} {}", "4".blue(), "Use YouTube upload date for all remaining".cyan());
+                println!("{} {}", "5".blue(), "Manually set release year for all remaining".cyan());
+                println!();
+                println!("Enter number:");
+            }
+            let mut input = 0;
+            if action_for_all == -1 {
+                input = input_num(1, 5);
+                if input == 4 {action_for_all = 1}
+                if input == 5 {action_for_all = 2}
+            }
+            if action_for_all != -1 {
+                input = action_for_all;
+            }
 
-        match input {
-            1 => (),
-            2 => {
-                println!("Enter year for {}:", song.raw_title.bright_green());
-                song.release_year = input_num(i32::MIN, i32::MAX);
-            },
-            3 => (),
-            _ => return Err("unknown input".into()),
+            match input {
+                1 => (),
+                2 => {
+                    println!("Enter year for {}:", song.raw_title.bright_green());
+                    song.release_year = input_num(i32::MIN, i32::MAX);
+                },
+                3 => {
+                    println!("Artist:");
+                    print_input_arrow();
+                    let custom_query_artist: String = read!("{}\n");
+                    println!("Title:");
+                    print_input_arrow();
+                    let custom_query_title: String = read!("{}\n");
+                    match get_music_braiz_year(&client, &custom_query_artist, &custom_query_title).await {
+                        Ok(year) => {
+                            song.release_year = year;
+                        },
+                        Err(_) => {
+                            info!("{}", "Song not found".red());
+                            continue;
+                        }
+                    }
+
+                },
+                _ => return Err("unknown input".into()),
+            }
+            info!("Using {} for {}", song.release_year.to_string().green(), song.raw_title.cyan());
+            break;
         }
-        println!("Using {} for {}", song.release_year.to_string().green(), song.raw_title.cyan());
     }
 
     Ok(())
 }
 
+fn print_input_arrow() {
+    print!("{}", "==> ".green());
+}
+
 fn input_num(range_min: i32, range_max: i32) -> i32 {
     loop {
-        print!("{}", "==> ".green());
-        let raw_input: String = read!();
+        print_input_arrow();
+        let raw_input: String = read!("{}\n");
         match raw_input.parse::<i32>() {
             Ok(i) => {
                 if i >= range_min && i <= range_max {
