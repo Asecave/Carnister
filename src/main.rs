@@ -138,7 +138,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut action_for_all = -1;
 
-    for mut song in skipped {
+    for song in skipped.iter_mut() {
         loop {
             if action_for_all == -1 {
                 println!();
@@ -195,7 +195,123 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    info!("All dates specified. Continuing with final rewiew...");
+
+    songs.append(&mut skipped);
+
+    draw_table(&songs, 0, 0);
+
     Ok(())
+}
+
+fn draw_table(elements: &Vec<Song>, page: u32, selected_element: u32) {
+    
+    // ┌─┬┐
+    // │ ││
+    // ├─┼┤
+    // └─┴┘
+
+    let longest_artist = elements.iter().map(|s| s.artist.len()).max().unwrap_or(0) as u32;
+    let longest_title = elements.iter().map(|s| s.title.len()).max().unwrap_or(0) as u32;
+    let longest_year = elements.iter().map(|s| s.release_year.to_string().len()).max().unwrap_or(0) as u32;
+
+    const SONGS_PER_PAGE: u32 = 20;
+    let mut displayed_songs: Vec<Option<&Song>> = Vec::new();
+    for i in 0..SONGS_PER_PAGE {
+        displayed_songs.push(elements.get((i + (page * SONGS_PER_PAGE)) as usize));
+    }
+
+    const TABLE_R: u8 = 100;
+    const TABLE_G: u8 = TABLE_R;
+    const TABLE_B: u8 = TABLE_R;
+
+    print!("{}", "┌────┬".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_artist + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    print!("{}", "┬".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_title + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    print!("{}", "┬".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_year + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    println!("{}", "┐".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    print!("{}", "│ ## │ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    print_string_with_fillup_spaces("Artist".to_string(), longest_artist + 1);
+    print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    print_string_with_fillup_spaces("Title".to_string(), longest_title + 1);
+    print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    print_string_with_fillup_spaces("Year".to_string(), longest_year + 1);
+    println!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+
+    print!("{}", "├────┼".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_artist + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    print!("{}", "┼".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_title + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    print!("{}", "┼".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_year + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    println!("{}", "┤".truecolor(TABLE_R, TABLE_G, TABLE_B));
+
+    let mut num = 1;
+    for song in displayed_songs {
+        
+        let artist;
+        let title;
+        let year;
+        match song {
+            Some(song) => {
+                artist = song.artist.clone();
+                title = song.title.clone();
+                year = song.release_year.to_string();
+            },
+            None => {
+                artist = String::new();
+                title = String::new();
+                year = String::new();
+            },
+        };
+        let num_str = (if num <= 9 {" ".to_string()} else {"".to_string()}) + &num.to_string();
+        print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+        print!("{}{}", num_str.blue(), " │ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+        print_string_with_fillup_spaces(artist, longest_artist + 1);
+        print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+        print_string_with_fillup_spaces(title, longest_title + 1);
+        print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+        print_string_with_fillup_spaces(year, longest_year + 1);
+        println!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+
+        num += 1;
+    }
+
+    print!("{}", "└────┴".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_artist + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    print!("{}", "┴".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_title + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    print!("{}", "┴".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_year + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    println!("{}", "┘".truecolor(TABLE_R, TABLE_G, TABLE_B));
+
+}
+
+fn print_string_with_fillup_spaces(string: String, length: u32) {
+    print!("{}", string.green());
+    for _ in (string.len() as u32)..length {
+        print!(" ");
+    }
 }
 
 fn print_input_arrow() {
