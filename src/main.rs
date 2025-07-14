@@ -1,6 +1,6 @@
 
 use core::fmt;
-use std::{env, error::Error, time::Duration};
+use std::{cmp::min, env, error::Error, i32, time::Duration};
 use colored::Colorize;
 use dotenv::dotenv;
 use env_logger::{Builder, Env};
@@ -19,6 +19,7 @@ struct Song {
     release_year: i32,
     video_id: String,
     raw_title: String,
+    detected_title: Option<String>,
 }
 
 impl fmt::Display for Song {
@@ -83,9 +84,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         pb.set_position(progress_bar_pos);
         progress_bar_pos += 1;
 
-        if progress_bar_pos < 17 {
-            continue;
-        }
+        // if progress_bar_pos < 25 {
+        //     continue;
+        // }
         
         let id = video["contentDetails"]["videoId"].to_string().trim_matches('\"').to_string();
         let raw_title = video["snippet"]["title"].to_string().trim_matches('\"').to_string();
@@ -112,22 +113,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         tokio::time::sleep(Duration::from_millis(timeout)).await;
 
-        let year = match get_music_braiz_year(&client, &artist, &title).await {
+        let (year, detected_title) = match get_music_braiz_year(&client, &artist, &title).await {
             Ok(year) => year,
             Err(_) => {
                 warn!("{} {} - {}, {}", "Song not found.".red(), artist.red(), title.red(), "Skipping for now.".red());
-                skipped.push(Song{artist, title, release_year: upload_date, video_id: id, raw_title});
+                skipped.push(Song{artist, title, release_year: upload_date, video_id: id, raw_title, detected_title: None});
                 continue;
             }
         };
 
-        let song = Song{artist, title, release_year: year, video_id: id, raw_title};
+        let song = Song{artist, title, release_year: year, video_id: id, raw_title, detected_title: Some(detected_title)};
 
         songs.push(song);
 
-        if progress_bar_pos >= 22 {
-            break;
-        }// rmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+        // if progress_bar_pos >= 35 {
+        //     break;
+        // }// rmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
     }
 
     pb.finish_with_message("All data received.");
@@ -178,8 +179,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     print_input_arrow();
                     let custom_query_title: String = read!("{}\n");
                     match get_music_braiz_year(&client, &custom_query_artist, &custom_query_title).await {
-                        Ok(year) => {
+                        Ok((year, detected_title)) => {
                             song.release_year = year;
+                            song.detected_title = Some(detected_title);
                         },
                         Err(_) => {
                             info!("{}", "Song not found".red());
@@ -198,28 +200,107 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("All dates specified. Continuing with final rewiew...");
 
     songs.append(&mut skipped);
+    
+    let mut page = 0;
+    let mut elements_per_page = 20;
+    loop {
+        let page_count = f32::ceil(songs.len() as f32 / elements_per_page as f32) as u32;
 
-    draw_table(&songs, 0, 0);
+        let page_str = format!("Page {}/{}", page + 1, page_count);
+        println!();
+        println!("{}", page_str.green());
+        let elements_displayed = draw_table(&songs, page, elements_per_page);
+        println!();
+        println!("{}", "Actions:");
+        println!("{}", "Number to select element".cyan());
+        println!("{}", "a/d to change page".cyan());
+        println!("{}", "+/- to change number of elements per page".cyan());
+        println!("{}", "y to finish".cyan());
+        println!();
+        print_input_arrow();
+        let input: String = read!("{}\n");
+        match input.parse::<u32>() {
+            Ok(num) => {
+                if num > min(elements_displayed, elements_per_page) || num < 1 {
+                    continue;
+                }
+                let selected = songs.get_mut(((num - 1) + (page * elements_per_page)) as usize).unwrap();
+                println!("Selected:");
+                println!("{} {} - {}", "Title for card: ", selected.artist.bright_green(), selected.title.bright_green());
+                if let Some(title) = &selected.detected_title {
+                    println!("{} {}", "Detected title: ", title.bright_green());
+                }
+                println!("{} {}", "Year:           ", selected.release_year.to_string().bright_green());
+                println!();
+                println!("Actions:");
+                println!("{} {}", "1".blue(), "Change artist".cyan());
+                println!("{} {}", "2".blue(), "Change title".cyan());
+                println!("{} {}", "3".blue(), "Change year".cyan());
+                println!("{} {}", "4".blue(), "Cancel".cyan());
+                println!();
+                let action = input_num(1, 4);
+                match action {
+                    1 => {
+                        println!("    {}", selected.artist.blue());
+                        print_input_arrow();
+                        selected.artist = read!("{}\n");
+                    },
+                    2 => {
+                        println!("    {}", selected.title.blue());
+                        print_input_arrow();
+                        selected.title = read!("{}\n");
+                    },
+                    3 => {
+                        println!("    {}", selected.release_year.to_string().blue());
+                        selected.release_year = input_num(i32::MIN, i32::MAX);
+                    },
+                    4 => continue,
+                    _ => return Err("unknown input".into()),
+                }
+            },
+            Err(_) => {
+                match input.as_str() {
+                    "a" => {
+                        if page > 0 {
+                            page -= 1;
+                        }
+                    },
+                    "d" => {
+                        if page < page_count - 1 {
+                            page += 1;
+                        }
+                    },
+                    "+" => {
+                        elements_per_page += 10;
+                    },
+                    "-" => {
+                        if elements_per_page > 10 {
+                            elements_per_page -= 10;
+                        }
+                    },
+                    "y" => break,
+                    _ => continue,
+                }
+            }
+        }
+    }
 
     Ok(())
 }
 
-fn draw_table(elements: &Vec<Song>, page: u32, selected_element: u32) {
-    
-    // ┌─┬┐
-    // │ ││
-    // ├─┼┤
-    // └─┴┘
+fn draw_table(elements: &Vec<Song>, page: u32, elements_per_page: u32) -> u32 {
 
     let longest_artist = elements.iter().map(|s| s.artist.len()).max().unwrap_or(0) as u32;
     let longest_title = elements.iter().map(|s| s.title.len()).max().unwrap_or(0) as u32;
+    let longest_detected_title = elements.iter().map(|s| s.detected_title.clone().unwrap_or("".to_string()).len()).max().unwrap_or(0) as u32;
     let longest_year = elements.iter().map(|s| s.release_year.to_string().len()).max().unwrap_or(0) as u32;
 
-    const SONGS_PER_PAGE: u32 = 20;
     let mut displayed_songs: Vec<Option<&Song>> = Vec::new();
-    for i in 0..SONGS_PER_PAGE {
-        displayed_songs.push(elements.get((i + (page * SONGS_PER_PAGE)) as usize));
+    for i in 0..elements_per_page {
+        displayed_songs.push(elements.get((i + (page * elements_per_page)) as usize));
     }
+
+    let displayed_songs_count = displayed_songs.iter().filter(|s| s.is_some()).count() as u32;
 
     const TABLE_R: u8 = 100;
     const TABLE_G: u8 = TABLE_R;
@@ -234,16 +315,26 @@ fn draw_table(elements: &Vec<Song>, page: u32, selected_element: u32) {
         print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
     }
     print!("{}", "┬".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_detected_title + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    print!("{}", "┬".truecolor(TABLE_R, TABLE_G, TABLE_B));
     for _ in 0..longest_year + 2 {
         print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
     }
     println!("{}", "┐".truecolor(TABLE_R, TABLE_G, TABLE_B));
     print!("{}", "│ ## │ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
-    print_string_with_fillup_spaces("Artist".to_string(), longest_artist + 1);
+    print!("{}", "Artist".to_string().green());
+    fillup_spaces("Artist".to_string(), longest_artist + 1);
     print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
-    print_string_with_fillup_spaces("Title".to_string(), longest_title + 1);
+    print!("{}", "Title".to_string().green());
+    fillup_spaces("Title".to_string(), longest_title + 1);
     print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
-    print_string_with_fillup_spaces("Year".to_string(), longest_year + 1);
+    print!("{}", "Detected Title".to_string().green());
+    fillup_spaces("Detected Title".to_string(), longest_detected_title + 1);
+    print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    print!("{}", "Year".to_string().green());
+    fillup_spaces("Year".to_string(), longest_year + 1);
     println!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
 
     print!("{}", "├────┼".truecolor(TABLE_R, TABLE_G, TABLE_B));
@@ -252,6 +343,10 @@ fn draw_table(elements: &Vec<Song>, page: u32, selected_element: u32) {
     }
     print!("{}", "┼".truecolor(TABLE_R, TABLE_G, TABLE_B));
     for _ in 0..longest_title + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    print!("{}", "┼".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_detected_title + 2 {
         print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
     }
     print!("{}", "┼".truecolor(TABLE_R, TABLE_G, TABLE_B));
@@ -265,27 +360,74 @@ fn draw_table(elements: &Vec<Song>, page: u32, selected_element: u32) {
         
         let artist;
         let title;
+        let detected_title;
         let year;
+        let base_detected_title;
         match song {
             Some(song) => {
                 artist = song.artist.clone();
                 title = song.title.clone();
+
+                detected_title = match song.detected_title.clone() {
+                    Some(mut raw_detected_title) => {
+
+                        base_detected_title = raw_detected_title.clone();
+                
+                        let detected_title_copy = raw_detected_title.clone();
+                        let (artist_split, title_split) = detected_title_copy.split_once(" - ").unwrap();
+                        let artists: Vec<&str> = artist_split.split(", ").collect();
+
+                        for det_artist in artists {
+                            match raw_detected_title.split_once(det_artist) {
+                                Some((left, right)) => {
+                                    if artist.to_lowercase().contains(det_artist.to_lowercase().as_str()) {
+                                        raw_detected_title = left.to_string() + &det_artist.green().to_string() + right;
+                                    }
+                                },
+                                None => (),
+                            }
+                        }
+                        match raw_detected_title.split_once(title_split) {
+                            Some((left, right)) => {
+                                if title.to_lowercase().contains(title_split.to_lowercase().as_str()) {
+                                    raw_detected_title = left.to_string() + &title_split.green().to_string() + right;
+                                }
+                            },
+                            None => (),
+                        }
+
+                        raw_detected_title.blue().to_string()
+                    },
+                    None => {
+                        base_detected_title = String::new();
+                        String::new()
+                    }
+                };
+
                 year = song.release_year.to_string();
             },
             None => {
                 artist = String::new();
                 title = String::new();
+                detected_title = String::new();
                 year = String::new();
+                base_detected_title = String::new();
             },
         };
         let num_str = (if num <= 9 {" ".to_string()} else {"".to_string()}) + &num.to_string();
         print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
         print!("{}{}", num_str.blue(), " │ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
-        print_string_with_fillup_spaces(artist, longest_artist + 1);
+        print!("{}", artist.green());
+        fillup_spaces(artist, longest_artist + 1);
         print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
-        print_string_with_fillup_spaces(title, longest_title + 1);
+        print!("{}", title.green());
+        fillup_spaces(title, longest_title + 1);
         print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
-        print_string_with_fillup_spaces(year, longest_year + 1);
+        print!("{}", detected_title.green());
+        fillup_spaces(base_detected_title, longest_detected_title + 1);
+        print!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
+        print!("{}", year.green());
+        fillup_spaces(year, longest_year + 1);
         println!("{}", "│ ".truecolor(TABLE_R, TABLE_G, TABLE_B));
 
         num += 1;
@@ -300,15 +442,20 @@ fn draw_table(elements: &Vec<Song>, page: u32, selected_element: u32) {
         print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
     }
     print!("{}", "┴".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    for _ in 0..longest_detected_title + 2 {
+        print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
+    }
+    print!("{}", "┴".truecolor(TABLE_R, TABLE_G, TABLE_B));
     for _ in 0..longest_year + 2 {
         print!("{}", "─".truecolor(TABLE_R, TABLE_G, TABLE_B));
     }
     println!("{}", "┘".truecolor(TABLE_R, TABLE_G, TABLE_B));
 
+    return displayed_songs_count;
+
 }
 
-fn print_string_with_fillup_spaces(string: String, length: u32) {
-    print!("{}", string.green());
+fn fillup_spaces(string: String, length: u32) {
     for _ in (string.len() as u32)..length {
         print!(" ");
     }
@@ -361,7 +508,7 @@ async fn fetch_videos(api_key: &str, playlist_id: &str) -> Result<Vec<Value>, Bo
     Ok(videos)
 }
 
-async fn get_music_braiz_year(client: &Client, artist: &str, title: &str) -> Result<i32, Box<dyn std::error::Error>> {
+async fn get_music_braiz_year(client: &Client, artist: &str, title: &str) -> Result<(i32, String), Box<dyn std::error::Error>> {
 
     let url = format!("https://musicbrainz.org/ws/2/recording?query=recording:\"{}\" AND artist:\"{}\"&fmt=json", &title, &artist);
 
@@ -378,19 +525,20 @@ async fn get_music_braiz_year(client: &Client, artist: &str, title: &str) -> Res
         return Err(format!("No date found. Url: {}", url).into());
     }
 
-    let mut date = json["recordings"][0]["first-release-date"].to_string().trim_matches('\"').to_string();
+    let mut date = json["recordings"][0]["first-release-date"].as_str().unwrap_or("").to_string();
 
     let first_dash = match date.find("-") {
         Some(index) => index,
         None => return Err(format!("Date Parsing Error: {}, {}", date, url).into())
     };
 
-    let artists: Vec<String> = json["recordings"][0]["artist-credit"].as_array().unwrap().iter().map(|val| val["name"].to_string()).collect();
-    info!("{} {} - {}", "Found:".green(), artists.iter().fold("".to_string(), |a, b| a + ", " + b).split_off(2), json["recordings"][0]["title"]);
+    let artists: Vec<String> = json["recordings"][0]["artist-credit"].as_array().unwrap().iter().map(|val| val["name"].as_str().unwrap_or("").to_string()).collect();
+    let detected_title = artists.iter().fold("".to_string(), |a, b| a + ", " + b).split_off(2) + " - " + json["recordings"][0]["title"].as_str().unwrap_or("");
+    info!("{} {}", "Found:".green(), detected_title);
 
     date.truncate(first_dash);
 
-    Ok(date.parse::<i32>().unwrap())
+    Ok((date.parse::<i32>().unwrap(), detected_title))
 }
 
 async fn receive_json(client: &Client, url: &str) -> Result<Value, Box<dyn std::error::Error>> {
