@@ -17,6 +17,7 @@ struct Song {
     artist: String,
     title: String,
     release_year: i32,
+    youtube_year: i32,
     video_id: String,
     raw_title: String,
     detected_title: Option<String>,
@@ -84,9 +85,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         pb.set_position(progress_bar_pos);
         progress_bar_pos += 1;
 
-        // if progress_bar_pos < 25 {
-        //     continue;
-        // }
+        if progress_bar_pos < 25 {
+            continue;
+        }
         
         let id = video["contentDetails"]["videoId"].to_string().trim_matches('\"').to_string();
         let raw_title = video["snippet"]["title"].to_string().trim_matches('\"').to_string();
@@ -117,18 +118,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok(year) => year,
             Err(_) => {
                 warn!("{} {} - {}, {}", "Song not found.".red(), artist.red(), title.red(), "Skipping for now.".red());
-                skipped.push(Song{artist, title, release_year: upload_date, video_id: id, raw_title, detected_title: None});
+                skipped.push(Song{artist, title, release_year: upload_date, youtube_year: upload_date, video_id: id, raw_title, detected_title: None});
                 continue;
             }
         };
 
-        let song = Song{artist, title, release_year: year, video_id: id, raw_title, detected_title: Some(detected_title)};
+        let song = Song{artist, title, release_year: year, youtube_year: upload_date, video_id: id, raw_title, detected_title: Some(detected_title)};
 
         songs.push(song);
 
-        // if progress_bar_pos >= 35 {
-        //     break;
-        // }// rmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+        if progress_bar_pos >= 35 {
+            break;
+        }// rmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
     }
 
     pb.finish_with_message("All data received.");
@@ -172,23 +173,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     song.release_year = input_num(i32::MIN, i32::MAX);
                 },
                 3 => {
-                    println!("Artist:");
-                    print_input_arrow();
-                    let custom_query_artist: String = read!("{}\n");
-                    println!("Title:");
-                    print_input_arrow();
-                    let custom_query_title: String = read!("{}\n");
-                    match get_music_braiz_year(&client, &custom_query_artist, &custom_query_title).await {
-                        Ok((year, detected_title)) => {
-                            song.release_year = year;
-                            song.detected_title = Some(detected_title);
-                        },
-                        Err(_) => {
-                            info!("{}", "Song not found".red());
-                            continue;
-                        }
+                    match custom_query(&client, song).await {
+                        Ok(_) => (),
+                        Err(_) => continue,
                     }
-
                 },
                 _ => return Err("unknown input".into()),
             }
@@ -203,7 +191,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     let mut page = 0;
     let mut elements_per_page = 20;
-    loop {
+    'outer: loop {
         let page_count = f32::ceil(songs.len() as f32 / elements_per_page as f32) as u32;
 
         let page_str = format!("Page {}/{}", page + 1, page_count);
@@ -221,41 +209,56 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let input: String = read!("{}\n");
         match input.parse::<u32>() {
             Ok(num) => {
-                if num > min(elements_displayed, elements_per_page) || num < 1 {
-                    continue;
-                }
-                let selected = songs.get_mut(((num - 1) + (page * elements_per_page)) as usize).unwrap();
-                println!("Selected:");
-                println!("{} {} - {}", "Title for card: ", selected.artist.bright_green(), selected.title.bright_green());
-                if let Some(title) = &selected.detected_title {
-                    println!("{} {}", "Detected title: ", title.bright_green());
-                }
-                println!("{} {}", "Year:           ", selected.release_year.to_string().bright_green());
-                println!();
-                println!("Actions:");
-                println!("{} {}", "1".blue(), "Change artist".cyan());
-                println!("{} {}", "2".blue(), "Change title".cyan());
-                println!("{} {}", "3".blue(), "Change year".cyan());
-                println!("{} {}", "4".blue(), "Cancel".cyan());
-                println!();
-                let action = input_num(1, 4);
-                match action {
-                    1 => {
-                        println!("    {}", selected.artist.blue());
-                        print_input_arrow();
-                        selected.artist = read!("{}\n");
-                    },
-                    2 => {
-                        println!("    {}", selected.title.blue());
-                        print_input_arrow();
-                        selected.title = read!("{}\n");
-                    },
-                    3 => {
-                        println!("    {}", selected.release_year.to_string().blue());
-                        selected.release_year = input_num(i32::MIN, i32::MAX);
-                    },
-                    4 => continue,
-                    _ => return Err("unknown input".into()),
+                loop {
+                    if num > min(elements_displayed, elements_per_page) || num < 1 {
+                        continue 'outer;
+                    }
+                    let selected = songs.get_mut(((num - 1) + (page * elements_per_page)) as usize).unwrap();
+                    println!("Selected:");
+                    println!("{} {} - {}", "Title for card: ", selected.artist.bright_green(), selected.title.bright_green());
+                    if let Some(title) = &selected.detected_title {
+                        println!("{} {}", "Detected title: ", title.bright_green());
+                    }
+                    println!("{} {}", "Year:           ", selected.release_year.to_string().bright_green());
+                    println!();
+                    println!("Actions:");
+                    println!("{} {}", "1".blue(), "New query".cyan());
+                    println!("{} {}", "2".blue(), "Change artist".cyan());
+                    println!("{} {}", "3".blue(), "Change title".cyan());
+                    println!("{} {}", "4".blue(), "Change year".cyan());
+                    println!("{} {}{}{}", "5".blue(), "Switch to YouTube year (".cyan(), selected.youtube_year.to_string().blue(), ")".cyan());
+                    println!("{} {}", "6".blue(), "Return".cyan());
+                    println!();
+                    let action = input_num(1, 6);
+                    match action {
+                        1 => {
+                            match custom_query(&client, selected).await {
+                                Ok(_) => (),
+                                Err(_) => continue,
+                            }
+                        },
+                        2 => {
+                            println!("    {}", selected.artist.blue());
+                            print_input_arrow();
+                            selected.artist = read!("{}\n");
+                        },
+                        3 => {
+                            println!("    {}", selected.title.blue());
+                            print_input_arrow();
+                            selected.title = read!("{}\n");
+                        },
+                        4 => {
+                            println!("    {}", selected.release_year.to_string().blue());
+                            selected.release_year = input_num(i32::MIN, i32::MAX);
+                        },
+                        5 => {
+                            selected.release_year = selected.youtube_year;
+                            println!("Using {} for {}", selected.release_year.to_string().blue(), selected.raw_title.green());
+                        },
+                        6 => continue 'outer,
+                        _ => return Err("unknown input".into()),
+                    }
+                    break;
                 }
             },
             Err(_) => {
@@ -285,6 +288,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    Ok(())
+}
+
+async fn custom_query(client: &Client, song: &mut Song) -> Result<(), Box<dyn Error>> {
+    println!("Artist:");
+    print_input_arrow();
+    let custom_query_artist: String = read!("{}\n");
+    println!("Title:");
+    print_input_arrow();
+    let custom_query_title: String = read!("{}\n");
+    match get_music_braiz_year(&client, &custom_query_artist, &custom_query_title).await {
+        Ok((year, detected_title)) => {
+            song.release_year = year;
+            song.detected_title = Some(detected_title);
+        },
+        Err(_) => {
+            info!("{}", "Song not found".red());
+            return Err("Song not found".into());
+        }
+    }
     Ok(())
 }
 
