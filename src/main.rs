@@ -1,6 +1,6 @@
 
 use core::fmt;
-use std::{cmp::min, env, error::Error, i32, time::Duration};
+use std::{cmp::min, env, error::Error, fs::File, i32, time::Duration};
 use colored::Colorize;
 use dotenv::dotenv;
 use env_logger::{Builder, Env};
@@ -9,8 +9,10 @@ use indicatif_log_bridge::LogWrapper;
 use log::*;
 use regex::Regex;
 use reqwest::{header::{HeaderValue, USER_AGENT}, Client, Url};
+use rusttype::{Font, Point};
 use serde_json::Value;
 use text_io::read;
+use text_svg::Text;
 use std::io::Write;
 
 struct Song {
@@ -127,7 +129,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         songs.push(song);
 
-        if progress_bar_pos >= 35 {
+        if progress_bar_pos >= 27 {
             break;
         }// rmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
     }
@@ -148,7 +150,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("{} {} - {}", "Queried title: ", song.artist.bright_green(), song.title.bright_green());
                 println!();
                 println!("Actions:");
-                println!("{} {}", "1".blue(), "Use YouTube upload date".cyan());
+                println!("{} {}{}{}", "1".blue(), "Use YouTube upload date (".cyan(), song.youtube_year, ")".cyan());
                 println!("{} {}", "2".blue(), "Manually set release year".cyan());
                 println!("{} {}", "3".blue(), "Edit song name for database query".cyan());
                 println!("{} {}", "4".blue(), "Use YouTube upload date for all remaining".cyan());
@@ -288,7 +290,92 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    info!("Creating qr-codes...");
+
+    let font_data = std::fs::read("./CalSans-SemiBold.ttf")
+        .expect("Error reading font file");
+    let font = Font::try_from_vec(font_data).expect("Failed to load font");
+
+    let icon = std::fs::read("./Carnister.svg").expect("Error reading icon file").iter().fold(String::new(), |a, b| a + &(*b as char).to_string());
+    let background_design = std::fs::read("./design0.svg").expect("Error reading design file").iter().fold(String::new(), |a, b| a + &(*b as char).to_string());
+
+    let mut svg = Vec::new();
+
+    // let link = format!("https://music.youtube.com/watch?v={}", songs[0].video_id);
+    
+    // let mut qr = qrcode_generator::to_svg_to_string(link, QrCodeEcc::Low, 50, None::<&str>).unwrap();
+    // let qr = qr.split_off(qr.find("<path").unwrap());
+    // let qr = qr.trim_end_matches("</svg>");
+
+    svg.push("<svg viewBox=\"0 0 210 297\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">".into());
+    svg.push("<rect fill=\"#AAAAAA\" x=\"0\" y=\"0\" width=\"210\" height=\"297\"/>".into());
+
+    svg.push("<svg x=\"0\" y=\"0\" width=\"65\" height=\"65\">".into());
+    svg.push("<rect fill=\"#00FF00\" x=\"0\" y=\"0\" width=\"65\" height=\"65\"/>".into());
+    svg.push(create_card_front_svg_component(&songs[0], &font, &icon, &background_design));
+    svg.push("</svg>".into());
+
+    svg.push("<svg x=\"65\" y=\"0\" width=\"65\" height=\"65\">".into());
+    svg.push("<rect fill=\"#00FF00\" x=\"0\" y=\"0\" width=\"65\" height=\"65\"/>".into());
+    svg.push(create_card_front_svg_component(&songs[0], &font, &icon, &background_design));
+    svg.push("</svg>".into());
+
+    svg.push("<svg x=\"130\" y=\"0\" width=\"65\" height=\"65\">".into());
+    svg.push("<rect fill=\"#00FF00\" x=\"0\" y=\"0\" width=\"65\" height=\"65\"/>".into());
+    svg.push(create_card_front_svg_component(&songs[0], &font, &icon, &background_design));
+    svg.push("</svg>".into());
+
+    svg.push("</svg>".into());
+
+    let svg = svg.iter().fold(String::new(), |a, b| a + b + "\n");
+
+    let mut output_file = File::create("./file_output.svg")?;
+    writeln!(output_file, "{}", svg)?;
+
     Ok(())
+}
+
+fn create_card_front_svg_component(song: &Song, font: &Font, icon: &String, bg_design: &String) -> String {
+    
+    let mut svg = Vec::new();
+
+    let year = Text::builder().size(30.0).start(Point {x: 0.0, y: 0.0}).build(font, &song.release_year.to_string());
+    let year_x = (100.0 - year.bounding_box.width()) / 2.0;
+    let year_y = (100.0 - year.bounding_box.height()) / 2.0 - year.bounding_box.height() / 5.0;
+
+    let artist = Text::builder().size(5.0).start(Point {x: 0.0, y: 0.0}).build(font, &song.artist.to_string());
+    let artist_x = (100.0 - artist.bounding_box.width()) / 2.0;
+    let artist_y = 10.0;
+
+    let title = Text::builder().size(5.0).start(Point {x: 0.0, y: 0.0}).build(font, &song.title.to_string());
+    let title_x = (100.0 - title.bounding_box.width()) / 2.0;
+    let title_y = 82.0;
+
+    let bg = bg_design.clone().replace("=\"#05575d", "=\"#5d3705").replace("=\"#9c65ff", "=\"#ff6565");
+
+    svg.push("<svg viewBox=\"0 0 100 100\">".into());
+
+    svg.push(bg);
+
+    svg.push(format!("<svg x=\"{}\" y=\"{}\">", year_x, year_y));
+    svg.push(year.path.to_string());
+    svg.push("</svg>".into());
+
+    svg.push(format!("<svg x=\"{}\" y=\"{}\">", artist_x, artist_y));
+    svg.push(artist.path.to_string());
+    svg.push("</svg>".into());
+
+    svg.push(format!("<svg x=\"{}\" y=\"{}\">", title_x, title_y));
+    svg.push(title.path.to_string());
+    svg.push("</svg>".into());
+
+    svg.push("<svg x=\"3\" y=\"3\" width=\"10\" height=\"10\" viewBox=\"0 0 100 100\">".into());
+    svg.push(icon.clone());
+    svg.push("</svg>".into());
+
+    svg.push("</svg>".into());
+
+    svg.iter().fold(String::new(), |a, b| a + b + "\n")
 }
 
 async fn custom_query(client: &Client, song: &mut Song) -> Result<(), Box<dyn Error>> {
