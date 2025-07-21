@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 chrono = "0.4.41"
 colored = "3.0.0"
-dotenv = "0.15.0"
 env_logger = "0.11.8"
 indicatif = "0.18.0"
 indicatif-log-bridge = "0.2.3"

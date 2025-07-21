@@ -1,8 +1,7 @@
 
 use core::fmt;
-use std::{cmp::min, env, error::Error, fs::File, i32, time::Duration};
+use std::{cmp::min, error::Error, fs::File, i32, process::exit, time::Duration};
 use colored::Colorize;
-use dotenv::dotenv;
 use env_logger::{Builder, Env};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
@@ -27,13 +26,12 @@ struct Song {
 
 impl fmt::Display for Song {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}, {}, {}, {}, {}", self.artist, self.title, self.release_year, self.video_id, self.raw_title)
+        write!(f, "{}{sep}{}{sep}{}{sep}{}{sep}{}{sep}{}{sep}{:?}", self.artist, self.title, self.release_year, self.youtube_year, self.video_id, self.raw_title, self.detected_title, sep=char::from(31))
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    dotenv().ok();
 
     let logger = 
         Builder::from_env(Env::default().default_filter_or("info"))
@@ -59,137 +57,220 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap();
     log::set_max_level(level);
 
-    let api_key = env::var("YOUTUBE_API_KEY").expect("Specify a Youtube API key");
-    let playlist_id = "PLP9X6Hp3ZLpOsDk3AudxA5FueNmcrQTLr";
-
-    info!("Fetching videos from playlist...");
-
-    let videos = fetch_videos(&api_key, playlist_id).await.expect("Error while fetching videos");
-
-    let mut songs: Vec<Song> = Vec::new();
-    let mut skipped: Vec<Song> = Vec::new();
-    let client = Client::new();
-    let timeout = 1050;
-
-    info!("Setting request delay to {}ms to not get rate limited by MusicBrainz (they accept around 1 request per second)", timeout);
-    info!("Receiving data...");
-
-    let pb = multi.add(ProgressBar::new(videos.len() as u64));
-    pb.set_style(ProgressStyle::with_template("[{elapsed_precise}] [{wide_bar:.cyan/black}] {pos:>7}/{len:7} ({eta})")
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn fmt::Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
-        .progress_chars("=>-"));
-
-    let mut progress_bar_pos = 0;
-
-    for video in videos {
-        
-        pb.set_position(progress_bar_pos);
-        progress_bar_pos += 1;
-
-        if progress_bar_pos < 25 {
-            continue;
-        }
-        
-        let id = video["contentDetails"]["videoId"].to_string().trim_matches('\"').to_string();
-        let raw_title = video["snippet"]["title"].to_string().trim_matches('\"').to_string();
-        let upload_channel = video["snippet"]["videoOwnerChannelTitle"].to_string().trim_matches('\"').to_string();
-        let raw_upload_date = video["contentDetails"]["videoPublishedAt"].to_string().trim_matches('\"').to_string();
-
-        
-        let title;
-        let artist;
-        let upload_date;
-
-        let mut tmp_upload_date = raw_upload_date.clone();
-        tmp_upload_date.truncate(raw_upload_date.find("-").unwrap());
-        upload_date = tmp_upload_date.parse::<i32>().unwrap();
-
-        if raw_title.find(" - ") == None {
-            artist = clean_artist(&upload_channel.replace(" - Topic", ""));
-            title = clean_title(&raw_title);
-        } else {
-            let split_title: Vec<&str> = raw_title.split(" - ").collect();
-            artist = clean_artist(&split_title[0].to_string());
-            title = clean_title(&split_title[1].to_string());
-        }
-
-        tokio::time::sleep(Duration::from_millis(timeout)).await;
-
-        let (year, detected_title) = match get_music_braiz_year(&client, &artist, &title).await {
-            Ok(year) => year,
-            Err(_) => {
-                warn!("{} {} - {}, {}", "Song not found.".red(), artist.red(), title.red(), "Skipping for now.".red());
-                skipped.push(Song{artist, title, release_year: upload_date, youtube_year: upload_date, video_id: id, raw_title, detected_title: None});
-                continue;
-            }
-        };
-
-        let song = Song{artist, title, release_year: year, youtube_year: upload_date, video_id: id, raw_title, detected_title: Some(detected_title)};
-
-        songs.push(song);
-
-        if progress_bar_pos >= 27 {
-            break;
-        }// rmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
-    }
-
-    pb.finish_with_message("All data received.");
-    multi.remove(&pb);
-
-    info!("Revisiting songs that need manual intervention.");
     println!();
+    println!("Actions:");
+    println!();
+    println!("{}{}", "1 ".blue(), "Load song list from YouTube playlist".cyan());
+    println!("{}{}", "2 ".blue(), "Load song list from file".cyan());
+    println!();
+    println!("Enter number:");
+    let input = input_num(1, 2);
+    
+    let mut songs: Vec<Song> = Vec::new();
+    let client = Client::new();
+    
+    loop {
+        if input == 1 {
 
-    let mut action_for_all = -1;
+            let api_key = std::fs::read("./Carnister/youtube_api_key.txt").expect("Error reading youtube api key file").iter().fold(String::new(), |a, b| a + &(*b as char).to_string());
+            //let playlist_id = "PLP9X6Hp3ZLpOsDk3AudxA5FueNmcrQTLr";
+            //let playlist_id = "PLTUl2dTYKo6qyyf0CC5d9yQdt_oMkm-4b";
 
-    for song in skipped.iter_mut() {
-        loop {
-            if action_for_all == -1 {
-                println!();
-                println!("{} {}", "Youtube title: ", song.raw_title.bright_green());
-                println!("{} {} - {}", "Queried title: ", song.artist.bright_green(), song.title.bright_green());
-                println!();
-                println!("Actions:");
-                println!("{} {}{}{}", "1".blue(), "Use YouTube upload date (".cyan(), song.youtube_year, ")".cyan());
-                println!("{} {}", "2".blue(), "Manually set release year".cyan());
-                println!("{} {}", "3".blue(), "Edit song name for database query".cyan());
-                println!("{} {}", "4".blue(), "Use YouTube upload date for all remaining".cyan());
-                println!("{} {}", "5".blue(), "Manually set release year for all remaining".cyan());
-                println!();
-                println!("Enter number:");
-            }
-            let mut input = 0;
-            if action_for_all == -1 {
-                input = input_num(1, 5);
-                if input == 4 {action_for_all = 1}
-                if input == 5 {action_for_all = 2}
-            }
-            if action_for_all != -1 {
-                input = action_for_all;
-            }
-
-            match input {
-                1 => (),
-                2 => {
-                    println!("Enter year for {}:", song.raw_title.bright_green());
-                    song.release_year = input_num(i32::MIN, i32::MAX);
-                },
-                3 => {
-                    match custom_query(&client, song).await {
-                        Ok(_) => (),
-                        Err(_) => continue,
+            println!("Enter playlist link or id:");
+            print_input_arrow();
+            let input: String = read!("{}\n");
+            let playlist_id = match input.starts_with("http") {
+                true => match input.rsplit_once("list=") {
+                    Some((_, id)) => match id.split_once("&") {
+                        Some((id, _)) => id,
+                        None => id
+                    },
+                    None => {
+                        error!("Invalid playlist link");
+                        continue;
                     }
+
                 },
-                _ => return Err("unknown input".into()),
+                false => input.as_str()
+            };
+            
+            if api_key.len() == 0 {
+                error!("No YouTube API key specified. Put your YouTube API key in the Carnister/youtube_api_key.txt file.");
+                exit(1);
             }
-            info!("Using {} for {}", song.release_year.to_string().green(), song.raw_title.cyan());
-            break;
+
+
+            info!("Fetching videos from playlist...");
+
+            let videos = fetch_videos(&api_key, playlist_id).await.expect("Error while fetching videos");
+
+            let mut skipped: Vec<Song> = Vec::new();
+            let timeout = 1050;
+
+            info!("Setting request delay to {}ms to not get rate limited (MusicBrainz accepts around 1 request per second)", timeout);
+            info!("Receiving data...");
+
+            let pb = multi.add(ProgressBar::new(videos.len() as u64));
+            pb.set_style(ProgressStyle::with_template("[{elapsed_precise}] [{wide_bar:.cyan/black}] {pos:>7}/{len:7} ({eta})")
+            .unwrap()
+            .with_key("eta", |state: &ProgressState, w: &mut dyn fmt::Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+                .progress_chars("=>-"));
+
+            let mut progress_bar_pos = 0;
+
+            for video in videos {
+                
+                pb.set_position(progress_bar_pos);
+                progress_bar_pos += 1;
+
+                // if progress_bar_pos < 25 {
+                //     continue;
+                // }
+                
+                let id = video["contentDetails"]["videoId"].to_string().trim_matches('\"').to_string();
+                let raw_title = video["snippet"]["title"].to_string().trim_matches('\"').to_string();
+                let upload_channel = video["snippet"]["videoOwnerChannelTitle"].to_string().trim_matches('\"').to_string();
+                let raw_upload_date = video["contentDetails"]["videoPublishedAt"].to_string().trim_matches('\"').to_string();
+
+                
+                let title;
+                let artist;
+                let upload_date;
+
+                let mut tmp_upload_date = raw_upload_date.clone();
+                tmp_upload_date.truncate(raw_upload_date.find("-").unwrap());
+                upload_date = tmp_upload_date.parse::<i32>().unwrap();
+
+                if raw_title.find(" - ") == None {
+                    artist = clean_artist(&upload_channel.replace(" - Topic", ""));
+                    title = clean_title(&raw_title);
+                } else {
+                    let split_title: Vec<&str> = raw_title.split(" - ").collect();
+                    artist = clean_artist(&split_title[0].to_string());
+                    title = clean_title(&split_title[1].to_string());
+                }
+
+                tokio::time::sleep(Duration::from_millis(timeout)).await;
+
+                let (year, detected_title) = match get_music_braiz_year(&client, &artist, &title).await {
+                    Ok(year) => year,
+                    Err(_) => {
+                        warn!("{} {} - {}, {}", "Song not found.".red(), artist.red(), title.red(), "Skipping for now.".red());
+                        skipped.push(Song{artist, title, release_year: upload_date, youtube_year: upload_date, video_id: id, raw_title, detected_title: None});
+                        continue;
+                    }
+                };
+
+                let song = Song{artist, title, release_year: year, youtube_year: upload_date, video_id: id, raw_title, detected_title: Some(detected_title)};
+
+                songs.push(song);
+
+                // if progress_bar_pos >= 35 {
+                //     break;
+                // }// rmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+            }
+
+            pb.finish_with_message("All data received.");
+            multi.remove(&pb);
+
+            info!("Revisiting songs that need manual intervention.");
+            println!();
+
+            let mut action_for_all = -1;
+
+            for song in skipped.iter_mut() {
+                loop {
+                    if action_for_all == -1 {
+                        println!();
+                        println!("{} {}", "Youtube title: ", song.raw_title.bright_green());
+                        println!("{} {} - {}", "Queried title: ", song.artist.bright_green(), song.title.bright_green());
+                        println!();
+                        println!("Actions:");
+                        println!("{} {}{}{}", "1".blue(), "Use YouTube upload date (".cyan(), song.youtube_year.to_string().blue(), ")".cyan());
+                        println!("{} {}", "2".blue(), "Manually set release year".cyan());
+                        println!("{} {}", "3".blue(), "Edit song name for database query".cyan());
+                        println!("{} {}", "4".blue(), "Use YouTube upload date for all remaining".cyan());
+                        println!("{} {}", "5".blue(), "Manually set release year for all remaining".cyan());
+                        println!();
+                        println!("Enter number:");
+                    }
+                    let mut input = 0;
+                    if action_for_all == -1 {
+                        input = input_num(1, 5);
+                        if input == 4 {action_for_all = 1}
+                        if input == 5 {action_for_all = 2}
+                    }
+                    if action_for_all != -1 {
+                        input = action_for_all;
+                    }
+
+                    match input {
+                        1 => (),
+                        2 => {
+                            println!("Enter year for {}:", song.raw_title.bright_green());
+                            song.release_year = input_num(i32::MIN, i32::MAX);
+                        },
+                        3 => {
+                            match custom_query(&client, song).await {
+                                Ok(_) => (),
+                                Err(_) => continue,
+                            }
+                        },
+                        _ => return Err("unknown input".into()),
+                    }
+                    info!("Using {} for {}", song.release_year.to_string().green(), song.raw_title.cyan());
+                    break;
+                }
+            }
+
+            info!("All dates specified. Continuing with final rewiew...");
+
+            songs.append(&mut skipped);
+
+        } else {
+            let dir = std::fs::read_dir("./Carnister/song_lists").expect("Could not read song_lists dir");
+
+            let mut files = Vec::new();
+
+            println!("Select a file:");
+            let mut count = 1;
+            for path in dir {
+                match path {
+                    Ok(path) => {
+                        println!("{} {}", count.to_string().blue(), path.file_name().into_string().unwrap().cyan());
+                        files.push(path.path().display().to_string());
+                        count += 1;
+                    },
+                    Err(_) => println!("{}", "  Error".red())
+                };
+            }
+            println!();
+            let input = input_num(1, count);
+            
+            let file = match std::fs::read(&files[input as usize]) {
+                Ok(file) => file.iter().fold(String::new(), |a, b| a + &(*b as char).to_string()),
+                Err(_) => continue
+            };
+
+            for line in file.split("\n") {
+                let parts: Vec<&str> = line.split(char::from(31)).collect();
+
+                if parts.len() != 7 {continue;}
+
+                songs.push(Song {
+                    artist: parts[0].to_string(),
+                    title: parts[1].to_string(), 
+                    release_year: parts[2].parse::<i32>().unwrap(), 
+                    youtube_year: parts[3].parse::<i32>().unwrap(), 
+                    video_id: parts[4].to_string(), 
+                    raw_title: parts[5].to_string(), 
+                    detected_title: parse_option_string(parts[6])
+                });
+            }
+            
         }
+        break;
     }
-
-    info!("All dates specified. Continuing with final rewiew...");
-
-    songs.append(&mut skipped);
     
     let mut page = 0;
     let mut elements_per_page = 20;
@@ -290,14 +371,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    info!("Saving List...");
+
+    let mut song_list_file = File::create(format!("./Carnister/song_lists/song-list-{}.txt", chrono::Local::now().format("%Y-%m-%d-%H:%M:%S").to_string()))?;
+    for song in &songs {
+        writeln!(song_list_file, "{}", song.to_string())?;
+    }
+
     info!("Creating qr-codes...");
 
     let font_data = std::fs::read("./CalSans-SemiBold.ttf")
         .expect("Error reading font file");
     let font = Font::try_from_vec(font_data).expect("Failed to load font");
 
-    let icon = std::fs::read("./Carnister.svg").expect("Error reading icon file").iter().fold(String::new(), |a, b| a + &(*b as char).to_string());
-    let background_design = std::fs::read("./design0.svg").expect("Error reading design file").iter().fold(String::new(), |a, b| a + &(*b as char).to_string());
+    let icon = std::fs::read("./icon.svg").expect("Error reading icon file").iter().fold(String::new(), |a, b| a + &(*b as char).to_string());
+    let background_design = std::fs::read("./Carnister/designs/design0.svg").expect("Error reading design file").iter().fold(String::new(), |a, b| a + &(*b as char).to_string());
 
     let mut svg = Vec::new();
 
@@ -311,17 +399,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     svg.push("<rect fill=\"#AAAAAA\" x=\"0\" y=\"0\" width=\"210\" height=\"297\"/>".into());
 
     svg.push("<svg x=\"0\" y=\"0\" width=\"65\" height=\"65\">".into());
-    svg.push("<rect fill=\"#00FF00\" x=\"0\" y=\"0\" width=\"65\" height=\"65\"/>".into());
     svg.push(create_card_front_svg_component(&songs[0], &font, &icon, &background_design));
     svg.push("</svg>".into());
 
     svg.push("<svg x=\"65\" y=\"0\" width=\"65\" height=\"65\">".into());
-    svg.push("<rect fill=\"#00FF00\" x=\"0\" y=\"0\" width=\"65\" height=\"65\"/>".into());
     svg.push(create_card_front_svg_component(&songs[0], &font, &icon, &background_design));
     svg.push("</svg>".into());
 
     svg.push("<svg x=\"130\" y=\"0\" width=\"65\" height=\"65\">".into());
-    svg.push("<rect fill=\"#00FF00\" x=\"0\" y=\"0\" width=\"65\" height=\"65\"/>".into());
     svg.push(create_card_front_svg_component(&songs[0], &font, &icon, &background_design));
     svg.push("</svg>".into());
 
@@ -333,6 +418,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     writeln!(output_file, "{}", svg)?;
 
     Ok(())
+}
+
+fn parse_option_string(input: &str) -> Option<String> {
+    if input.starts_with("Some(") && input.ends_with(")") {
+        let inner = &input[6..input.len() - 2];
+        return Some(inner.to_string());
+    } else if input == "None" {
+        return None;
+    }
+    None
 }
 
 fn create_card_front_svg_component(song: &Song, font: &Font, icon: &String, bg_design: &String) -> String {
@@ -351,7 +446,10 @@ fn create_card_front_svg_component(song: &Song, font: &Font, icon: &String, bg_d
     let title_x = (100.0 - title.bounding_box.width()) / 2.0;
     let title_y = 82.0;
 
-    let bg = bg_design.clone().replace("=\"#05575d", "=\"#5d3705").replace("=\"#9c65ff", "=\"#ff6565");
+    let detection_prefix = "=\"";
+    let bg_replace_color1 = detection_prefix.to_string() + "#ff0000";
+    let bg_replace_color2 = detection_prefix.to_string() + "#0000ff";
+    let bg = bg_design.clone().replace(&bg_replace_color1, "=\"#5d3705").replace(&bg_replace_color2, "=\"#ff6565");
 
     svg.push("<svg viewBox=\"0 0 100 100\">".into());
 
@@ -699,5 +797,6 @@ fn clean_title(input: &String) -> String {
         })
         .to_string();
     let temp = other_re.replace_all(&temp, "").to_string();
+    let temp = temp.replace("\"", "");
     temp.trim().to_string()
 }
