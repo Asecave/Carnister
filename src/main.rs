@@ -152,8 +152,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 tokio::time::sleep(Duration::from_millis(timeout)).await;
 
-                let (year, detected_title) = match get_music_braiz_year(&client, &artist, &title).await {
-                    Ok(year) => year,
+                let (year, detected_title, _) = match get_music_braiz_results(&client, &artist, &title).await {
+                    Ok(results) => results[0].clone(),
                     Err(_) => {
                         warn!("{} {} - {}, {}", "Song not found.".red(), artist.red(), title.red(), "Skipping for now.".red());
                         skipped.push(Song{artist, title, release_year: upload_date, youtube_year: upload_date, video_id: id, raw_title, detected_title: None});
@@ -483,10 +483,17 @@ async fn custom_query(client: &Client, song: &mut Song) -> Result<(), Box<dyn Er
     println!("Title:");
     print_input_arrow();
     let custom_query_title: String = read!("{}\n");
-    match get_music_braiz_year(&client, &custom_query_artist, &custom_query_title).await {
-        Ok((year, detected_title)) => {
-            song.release_year = year;
-            song.detected_title = Some(detected_title);
+    match get_music_braiz_results(&client, &custom_query_artist, &custom_query_title).await {
+        Ok(results) => {
+            println!();
+            for (index, (year, detected_title, disambiguation)) in results.iter().enumerate() {
+                let d = match disambiguation {Some(d) => d, None => ""};
+                println!("{} {}", (index + 1).to_string().blue(), (year.to_string() + ": " + detected_title + "; " + d).cyan());
+            }
+            println!();
+            let input = input_num(1, results.len() as i32);
+            song.release_year = results[input as usize].0;
+            song.detected_title = Some(results[input as usize].1.clone());
         },
         Err(_) => {
             info!("{}", "Song not found".red());
@@ -716,11 +723,11 @@ async fn fetch_videos(api_key: &str, playlist_id: &str) -> Result<Vec<Value>, Bo
     Ok(videos)
 }
 
-async fn get_music_braiz_year(client: &Client, artist: &str, title: &str) -> Result<(i32, String), Box<dyn std::error::Error>> {
+async fn get_music_braiz_results(client: &Client, artist: &str, title: &str) -> Result<Vec<(i32, String, Option<String>)>, Box<dyn std::error::Error>> {
 
     let url = format!("https://musicbrainz.org/ws/2/recording?query=recording:\"{}\" AND artist:\"{}\"&fmt=json", &title, &artist);
 
-    info!("{} {} {} {}", "Getting".truecolor(100, 100, 100), artist.truecolor(100, 100, 100), "-".truecolor(100, 100, 100), title.truecolor(100, 100, 100));
+    info!("{} {} {} {}", "Getting".truecolor(75, 75, 75), artist.truecolor(100, 100, 100), "-".truecolor(100, 100, 100), title.truecolor(100, 100, 100));
 
     let json = receive_json(client, &url).await.unwrap();
     let result_count = json["recordings"].as_array().unwrap().len();
@@ -729,24 +736,49 @@ async fn get_music_braiz_year(client: &Client, artist: &str, title: &str) -> Res
         return Err(format!("Song not found. Url: {}", url).into())
     }
 
-    if json["recordings"][0]["first-release-date"].is_null() {
-        return Err(format!("No date found. Url: {}", url).into());
+    let mut results = Vec::new();
+
+    for result in json["recordings"].as_array().unwrap() {
+        
+        if result["first-release-date"].is_null() {
+            continue;
+        }
+    
+        let raw_date = result["first-release-date"].as_str().unwrap_or("").to_string();
+    
+        let date = match raw_date.split_once("-") {
+            Some((year, _)) => match year.parse::<i32>() {
+                Ok(year) => year,
+                Err(_) => {
+                    error!("Date Parsing Error: {}, {}", raw_date, url);
+                    continue;
+                }
+            },
+            None => match raw_date.parse::<i32>() {
+                Ok(year) => year,
+                Err(_) => {
+                    error!("Date Parsing Error: {}, {}", raw_date, url);
+                    continue;
+                }
+            }
+        };
+    
+        let artists: Vec<String> = result["artist-credit"].as_array().unwrap().iter().map(|val| val["name"].as_str().unwrap_or("").to_string()).collect();
+        let detected_title = artists.iter().fold("".to_string(), |a, b| a + ", " + b).split_off(2) + " - " + json["recordings"][0]["title"].as_str().unwrap_or("");
+        
+        let disambiguation = if !result["disambiguation"].is_null() {
+            Some(result["disambiguation"].to_string())
+        } else {
+            None
+        };
+
+        results.push((date, detected_title, disambiguation));
     }
+    info!("{} {} {} {} {}", "Found:".green(), results[0].1.cyan(), "and", results.len() - 1, "more.");
 
-    let mut date = json["recordings"][0]["first-release-date"].as_str().unwrap_or("").to_string();
-
-    let first_dash = match date.find("-") {
-        Some(index) => index,
-        None => return Err(format!("Date Parsing Error: {}, {}", date, url).into())
-    };
-
-    let artists: Vec<String> = json["recordings"][0]["artist-credit"].as_array().unwrap().iter().map(|val| val["name"].as_str().unwrap_or("").to_string()).collect();
-    let detected_title = artists.iter().fold("".to_string(), |a, b| a + ", " + b).split_off(2) + " - " + json["recordings"][0]["title"].as_str().unwrap_or("");
-    info!("{} {}", "Found:".green(), detected_title);
-
-    date.truncate(first_dash);
-
-    Ok((date.parse::<i32>().unwrap(), detected_title))
+    results.sort();
+    
+    Ok(results)
 }
 
 async fn receive_json(client: &Client, url: &str) -> Result<Value, Box<dyn std::error::Error>> {
