@@ -492,13 +492,15 @@ fn create_card_front_svg_component(song: &Song, font: &Font, icon: &String, bg_d
     let year_x = (100.0 - year.bounding_box.width()) / 2.0;
     let year_y = (100.0 - year.bounding_box.height()) / 2.0 - year.bounding_box.height() / 5.0;
 
-    let artist = Text::builder().size(5.0).start(Point {x: 0.0, y: 0.0}).build(font, &song.artist.to_string().replace(" ", "_"));
-    let artist_x = (100.0 - artist.bounding_box.width()) / 2.0;
-    let artist_y = 10.0;
+    // with font: style=\"direction:rtl ;font-family:CaskaydiaCove Nerd Font\"
 
-    let title = Text::builder().size(5.0).start(Point {x: 0.0, y: 0.0}).build(font, &song.title.to_string().replace(" ", "_"));
-    let title_x = (100.0 - title.bounding_box.width()) / 2.0;
-    let title_y = 82.0;
+    let artist = format!("<text x=\"50%\" y=\"10\" dominant-baseline=\"middle\" text-anchor=\"middle\" font-size=\"5\">{}</text>", song.artist.replace("&", "&amp;").replace("'", "&apos;"));
+    let artist_x = 0.0;
+    let artist_y = 5.0;
+
+    let title = format!("<text x=\"50%\" y=\"10\" dominant-baseline=\"middle\" text-anchor=\"middle\" font-size=\"5\">{}</text>", song.title.replace("&", "&amp;").replace("'", "&apos;"));
+    let title_x = 0.0;
+    let title_y = 77.0;
 
     let detection_prefix = "=\"";
     let bg_replace_color1 = detection_prefix.to_string() + "#ff0000";
@@ -540,11 +542,11 @@ fn create_card_front_svg_component(song: &Song, font: &Font, icon: &String, bg_d
     svg.push("</svg>".into());
 
     svg.push(format!("<svg x=\"{}\" y=\"{}\">", artist_x, artist_y));
-    svg.push(artist.path.to_string());
+    svg.push(artist);
     svg.push("</svg>".into());
 
     svg.push(format!("<svg x=\"{}\" y=\"{}\">", title_x, title_y));
-    svg.push(title.path.to_string());
+    svg.push(title);
     svg.push("</svg>".into());
 
     svg.push("<svg x=\"3\" y=\"3\" width=\"10\" height=\"10\" viewBox=\"0 0 100 100\">".into());
