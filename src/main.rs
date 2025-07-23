@@ -1,6 +1,6 @@
 
 use core::fmt;
-use std::{cmp::min, error::Error, fs::File, i32, process::exit, time::Duration};
+use std::{cmp::min, error::Error, fs::File, i32, io::{BufRead, BufReader}, process::exit, time::Duration};
 use colored::Colorize;
 use env_logger::{Builder, Env};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
@@ -173,14 +173,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
             pb.finish_with_message("All data received.");
             multi.remove(&pb);
 
-            info!("Revisiting songs that need manual intervention.");
             println!();
+            println!();
+            info!("Revisiting songs that need manual intervention.");
 
             let mut action_for_all = -1;
+
+            let mut current = 0;
+            let total_skipped = skipped.len() + 1;
 
             for song in skipped.iter_mut() {
                 loop {
                     if action_for_all == -1 {
+                        println!();
+                        current += 1;
+                        println!("{}{}{}", current.to_string().green(), "/".green(), total_skipped.to_string().green());
                         println!();
                         println!("{} {}", "Youtube title: ", song.raw_title.bright_green());
                         println!("{} {} - {}", "Queried title: ", song.artist.bright_green(), song.title.bright_green());
@@ -247,12 +254,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!();
             let input = input_num(1, count);
             
-            let file = match std::fs::read(&files[input as usize]) {
-                Ok(file) => file.iter().fold(String::new(), |a, b| a + &(*b as char).to_string()),
-                Err(_) => continue
-            };
+            // let file = match std::fs::File::open(&files[input as usize - 1]) {
+            //     Ok(file) => file.,
+            //     Err(_) => continue
+            // };
+            let file = BufReader::new(File::open(&files[input as usize - 1]).expect("open failed"));
 
-            for line in file.split("\n") {
+            for line in file.lines() {
+                let line = line.unwrap();
                 let parts: Vec<&str> = line.split(char::from(31)).collect();
 
                 if parts.len() != 7 {continue;}
@@ -310,7 +319,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     println!("{} {}", "3".blue(), "Change title".cyan());
                     println!("{} {}", "4".blue(), "Change year".cyan());
                     println!("{} {}{}{}", "5".blue(), "Switch to YouTube year (".cyan(), selected.youtube_year.to_string().blue(), ")".cyan());
-                    println!("{} {}", "6".blue(), "Return".cyan());
+                    println!("{} {}", "6".blue(), "Back".cyan());
                     println!();
                     let action = input_num(1, 6);
                     match action {
@@ -341,7 +350,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         6 => continue 'outer,
                         _ => return Err("unknown input".into()),
                     }
-                    break;
                 }
             },
             Err(_) => {
@@ -371,6 +379,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    songs.sort_by(|a, b| i32::cmp(&a.release_year, &b.release_year));
+
     info!("Saving List...");
 
     let mut song_list_file = File::create(format!("./Carnister/song_lists/song-list-{}.txt", chrono::Local::now().format("%Y-%m-%d-%H:%M:%S").to_string()))?;
@@ -378,7 +388,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         writeln!(song_list_file, "{}", song.to_string())?;
     }
 
-    info!("Creating qr-codes...");
+    info!("Generating cards...");
 
     let font_data = std::fs::read("./CalSans-SemiBold.ttf")
         .expect("Error reading font file");
@@ -394,21 +404,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // let mut qr = qrcode_generator::to_svg_to_string(link, QrCodeEcc::Low, 50, None::<&str>).unwrap();
     // let qr = qr.split_off(qr.find("<path").unwrap());
     // let qr = qr.trim_end_matches("</svg>");
-
-    svg.push("<svg viewBox=\"0 0 210 297\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">".into());
+    
+    svg.push("<svg viewBox=\"0 0 210 2097\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">".into());
     svg.push("<rect fill=\"#AAAAAA\" x=\"0\" y=\"0\" width=\"210\" height=\"297\"/>".into());
 
-    svg.push("<svg x=\"0\" y=\"0\" width=\"65\" height=\"65\">".into());
-    svg.push(create_card_front_svg_component(&songs[0], &font, &icon, &background_design));
-    svg.push("</svg>".into());
+    const CARD_SIZE: u32 = 65; //in mm
+    
+    for (index, song) in songs.iter().enumerate() {
+        let x = (index as u32 % 3) * CARD_SIZE;
+        let y = (index as u32 / 3) * CARD_SIZE;
+        svg.push(format!("<svg x=\"{}\" y=\"{}\" width=\"{CARD_SIZE}\" height=\"{CARD_SIZE}\">", x, y));
+        svg.push(create_card_front_svg_component(song, &font, &icon, &background_design));
+        svg.push("</svg>".into());
 
-    svg.push("<svg x=\"65\" y=\"0\" width=\"65\" height=\"65\">".into());
-    svg.push(create_card_front_svg_component(&songs[0], &font, &icon, &background_design));
-    svg.push("</svg>".into());
-
-    svg.push("<svg x=\"130\" y=\"0\" width=\"65\" height=\"65\">".into());
-    svg.push(create_card_front_svg_component(&songs[0], &font, &icon, &background_design));
-    svg.push("</svg>".into());
+    }
 
     svg.push("</svg>".into());
 
@@ -438,18 +447,44 @@ fn create_card_front_svg_component(song: &Song, font: &Font, icon: &String, bg_d
     let year_x = (100.0 - year.bounding_box.width()) / 2.0;
     let year_y = (100.0 - year.bounding_box.height()) / 2.0 - year.bounding_box.height() / 5.0;
 
-    let artist = Text::builder().size(5.0).start(Point {x: 0.0, y: 0.0}).build(font, &song.artist.to_string());
+    let artist = Text::builder().size(5.0).start(Point {x: 0.0, y: 0.0}).build(font, &song.artist.to_string().replace(" ", "_"));
     let artist_x = (100.0 - artist.bounding_box.width()) / 2.0;
     let artist_y = 10.0;
 
-    let title = Text::builder().size(5.0).start(Point {x: 0.0, y: 0.0}).build(font, &song.title.to_string());
+    let title = Text::builder().size(5.0).start(Point {x: 0.0, y: 0.0}).build(font, &song.title.to_string().replace(" ", "_"));
     let title_x = (100.0 - title.bounding_box.width()) / 2.0;
     let title_y = 82.0;
 
     let detection_prefix = "=\"";
     let bg_replace_color1 = detection_prefix.to_string() + "#ff0000";
     let bg_replace_color2 = detection_prefix.to_string() + "#0000ff";
-    let bg = bg_design.clone().replace(&bg_replace_color1, "=\"#5d3705").replace(&bg_replace_color2, "=\"#ff6565");
+
+    let number_colors = [
+        "#00202e",
+        "#2c4875",
+        "#8a508f",
+        "#bc5090",
+        "#ff6361",
+        "#ff8531",
+        "#ffa600",
+        "#80d353",
+        "#609f3f",
+        "#406a2a",
+    ];
+
+    let n10 = (song.release_year % 100 / 10) as usize;
+    let n1 = (song.release_year % 10) as usize;
+
+    let wrong_id_bg = bg_design.clone().replace(&bg_replace_color1, &(detection_prefix.to_string() + number_colors[n10])).replace(&bg_replace_color2, &(detection_prefix.to_string() + number_colors[n1]));
+    let mut bg = wrong_id_bg.clone();
+    let gradient_starts: Vec<(usize, &str)> = wrong_id_bg.match_indices("id=\"").collect();
+    for (index, _) in gradient_starts {
+        let start = index + 4;
+        let end = start + wrong_id_bg[start..].find("\"").expect("invalid svg gradient");
+        let id = &wrong_id_bg[start..end];
+        
+        bg = bg.replace(id, &song.video_id);
+    }
 
     svg.push("<svg viewBox=\"0 0 100 100\">".into());
 
@@ -490,10 +525,14 @@ async fn custom_query(client: &Client, song: &mut Song) -> Result<(), Box<dyn Er
                 let d = match disambiguation {Some(d) => d, None => ""};
                 println!("{} {}", (index + 1).to_string().blue(), (year.to_string() + ": " + detected_title + "; " + d).cyan());
             }
+            println!("{} {}", (results.len() + 1).to_string().blue(), "Back".cyan());
             println!();
-            let input = input_num(1, results.len() as i32);
-            song.release_year = results[input as usize].0;
-            song.detected_title = Some(results[input as usize].1.clone());
+            let input = input_num(1, results.len() as i32 + 1);
+            if input == results.len() as i32 + 1 {
+                return Err("Back".into())
+            }
+            song.release_year = results[input as usize - 1].0;
+            song.detected_title = Some(results[input as usize - 1].1.clone());
         },
         Err(_) => {
             info!("{}", "Song not found".red());
@@ -671,7 +710,7 @@ fn draw_table(elements: &Vec<Song>, page: u32, elements_per_page: u32) -> u32 {
 }
 
 fn fillup_spaces(string: String, length: u32) {
-    for _ in (string.len() as u32)..length {
+    for _ in (string.chars().count() as u32)..length {
         print!(" ");
     }
 }
@@ -765,7 +804,8 @@ async fn get_music_braiz_results(client: &Client, artist: &str, title: &str) -> 
     
         let artists: Vec<String> = result["artist-credit"].as_array().unwrap().iter().map(|val| val["name"].as_str().unwrap_or("").to_string()).collect();
         let detected_title = artists.iter().fold("".to_string(), |a, b| a + ", " + b).split_off(2) + " - " + json["recordings"][0]["title"].as_str().unwrap_or("");
-        
+        let detected_title = detected_title.replace("’", "'");
+
         let disambiguation = if !result["disambiguation"].is_null() {
             Some(result["disambiguation"].to_string())
         } else {
