@@ -6,6 +6,7 @@ use env_logger::{Builder, Env};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
 use log::*;
+use qrcode_generator::QrCodeEcc;
 use regex::Regex;
 use reqwest::{header::{HeaderValue, USER_AGENT}, Client, Url};
 use rusttype::{Font, Point};
@@ -252,12 +253,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 };
             }
             println!();
-            let input = input_num(1, count);
+            let input = input_num(1, count - 1);
             
-            // let file = match std::fs::File::open(&files[input as usize - 1]) {
-            //     Ok(file) => file.,
-            //     Err(_) => continue
-            // };
             let file = BufReader::new(File::open(&files[input as usize - 1]).expect("open failed"));
 
             for line in file.lines() {
@@ -383,7 +380,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     info!("Saving List...");
 
-    let mut song_list_file = File::create(format!("./Carnister/song_lists/song-list-{}.txt", chrono::Local::now().format("%Y-%m-%d-%H:%M:%S").to_string()))?;
+    let file_name = format!("song-list-{}", chrono::Local::now().format("%Y-%m-%d-%H:%M:%S").to_string());
+    let mut song_list_file = File::create(format!("./Carnister/song_lists/{}.txt", file_name))?;
     for song in &songs {
         writeln!(song_list_file, "{}", song.to_string())?;
     }
@@ -397,36 +395,83 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let icon = std::fs::read("./icon.svg").expect("Error reading icon file").iter().fold(String::new(), |a, b| a + &(*b as char).to_string());
     let background_design = std::fs::read("./Carnister/designs/design0.svg").expect("Error reading design file").iter().fold(String::new(), |a, b| a + &(*b as char).to_string());
 
-    let mut svg = Vec::new();
+    let mut pages: Vec<String> = Vec::new();
+    while !songs.is_empty() {
+        let mut card_songs: Vec<Song> = Vec::new();
+        for _ in 0..i32::min(songs.len() as i32, 12) {
+            card_songs.push(songs.pop().unwrap());
+        }
 
-    // let link = format!("https://music.youtube.com/watch?v={}", songs[0].video_id);
-    
-    // let mut qr = qrcode_generator::to_svg_to_string(link, QrCodeEcc::Low, 50, None::<&str>).unwrap();
-    // let qr = qr.split_off(qr.find("<path").unwrap());
-    // let qr = qr.trim_end_matches("</svg>");
-    
-    svg.push("<svg viewBox=\"0 0 210 2097\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">".into());
-    svg.push("<rect fill=\"#AAAAAA\" x=\"0\" y=\"0\" width=\"210\" height=\"297\"/>".into());
+        let (front, back) = create_card_page(&card_songs, &font, &icon, &background_design);
+        pages.push(front);
+        pages.push(back);
+    }
 
-    const CARD_SIZE: u32 = 65; //in mm
+    let mut svg: Vec<String> = Vec::new();
+
+    svg.push(format!("<svg viewBox=\"0 0 210 {}\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">", pages.len() * 297));
     
-    for (index, song) in songs.iter().enumerate() {
-        let x = (index as u32 % 3) * CARD_SIZE;
-        let y = (index as u32 / 3) * CARD_SIZE;
-        svg.push(format!("<svg x=\"{}\" y=\"{}\" width=\"{CARD_SIZE}\" height=\"{CARD_SIZE}\">", x, y));
-        svg.push(create_card_front_svg_component(song, &font, &icon, &background_design));
+    for (index, page) in pages.into_iter().enumerate() {
+        svg.push(format!("<svg x=\"0\" y=\"{}\" width=\"210\" height=\"297\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">", index * 297));
+        svg.push(page);
         svg.push("</svg>".into());
-
     }
 
     svg.push("</svg>".into());
 
     let svg = svg.iter().fold(String::new(), |a, b| a + b + "\n");
 
-    let mut output_file = File::create("./file_output.svg")?;
+    let mut output_file = File::create(format!("./Carnister/output/{}.svg", file_name))?;
     writeln!(output_file, "{}", svg)?;
 
     Ok(())
+}
+
+fn create_card_page(songs: &Vec<Song>, year_font: &Font, icon: &String, background_design: &String) -> (String, String) {
+
+    const CARD_SIZE: u32 = 65; //in mm
+
+    let mut front: Vec<String> = Vec::new();
+    
+    front.push("<svg viewBox=\"0 0 210 297\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">".into());
+    
+    for (index, song) in songs.iter().enumerate() {
+        let x = (index as u32 % 3) * CARD_SIZE;
+        let y = (index as u32 / 3) * CARD_SIZE;
+        front.push(format!("<svg x=\"{}\" y=\"{}\" width=\"{CARD_SIZE}\" height=\"{CARD_SIZE}\">", x, y));
+        front.push(create_card_front_svg_component(song, year_font, icon, background_design));
+        front.push("</svg>".into());
+    }
+
+    front.push("</svg>".into());
+
+    let front = front.iter().fold(String::new(), |a, b| a + b + "\n");
+
+    let mut back: Vec<String> = Vec::new();
+
+    back.push("<svg viewBox=\"0 0 210 297\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">".into());
+
+    for (index, song) in songs.iter().enumerate() {
+        let x = 210 - CARD_SIZE - ((index as u32 % 3) * CARD_SIZE);
+        let y = (index as u32 / 3) * CARD_SIZE;
+        back.push(format!("<svg x=\"{}\" y=\"{}\" width=\"{CARD_SIZE}\" height=\"{CARD_SIZE}\">", x, y));
+
+        let link = format!("https://music.youtube.com/watch?v={}", song.video_id);
+        
+        let mut qr = qrcode_generator::to_svg_to_string(link, QrCodeEcc::Low, CARD_SIZE as usize, None::<&str>).unwrap();
+        let qr = qr.split_off(qr.find("<path").unwrap());
+        let qr = qr.trim_end_matches("</svg>");
+
+        back.push(qr.to_owned());
+
+        back.push("</svg>".into());
+    }
+
+    back.push("</svg>".into());
+
+    let back = back.iter().fold(String::new(), |a, b| a + b + "\n");
+
+    (front, back)
 }
 
 fn parse_option_string(input: &str) -> Option<String> {
