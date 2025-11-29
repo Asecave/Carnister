@@ -397,23 +397,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         pages.push(front);
         pages.push(back);
     }
-
-    let mut svg: Vec<String> = Vec::new();
-
-    svg.push(format!("<svg viewBox=\"0 0 210 {}\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">", pages.len() * 297));
     
     for (index, page) in pages.into_iter().enumerate() {
-        svg.push(format!("<svg x=\"0\" y=\"{}\" width=\"210\" height=\"297\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\">", index * 297));
-        svg.push(page);
-        svg.push("</svg>".into());
+        let mut output_file = File::create(format!("./Carnister/output/{}_{}.svg", file_name, index))?;
+        writeln!(output_file, "{}", page.clone())?;
     }
-
-    svg.push("</svg>".into());
-
-    let svg = svg.iter().fold(String::new(), |a, b| a + b + "\n");
-
-    let mut output_file = File::create(format!("./Carnister/output/{}.svg", file_name))?;
-    writeln!(output_file, "{}", svg)?;
 
     Ok(())
 }
