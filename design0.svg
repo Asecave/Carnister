@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><defs><linearGradient id="14937830074800692512" x1="-0.49376766372550857" x2="100.86553465330087" y1="-0.6583568849673468" y2="100.70094543205903" gradientTransform="matrix(0.01,0,0,0.01,0,0)"><stop stop-color="#ff0000" /><stop offset="1" stop-color="#0000ff" /></linearGradient></defs><g>
+<rect fill="#ffffff" x="0" y="0" width="100" height="100"/>
+<g>
+	<g>
+		<path d="M0,0L 100,0 L 100,100 L 0,100 L 0,0 Z" fill="url('#14937830074800692512')"/>
+	</g>
+</g></g></svg>

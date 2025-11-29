@@ -1,6 +1,6 @@
 
 use core::fmt;
-use std::{cmp::min, error::Error, fs::File, i32, io::{BufRead, BufReader}, process::exit, time::Duration};
+use std::{cmp::min, error::Error, fs::File, io::{BufRead, BufReader}, process::exit, time::Duration};
 use colored::Colorize;
 use env_logger::{Builder, Env};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
@@ -13,6 +13,7 @@ use rusttype::{Font, Point};
 use serde_json::Value;
 use text_io::read;
 use text_svg::Text;
+use tokio::fs;
 use std::io::Write;
 
 struct Song {
@@ -58,6 +59,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap();
     log::set_max_level(level);
 
+    if let Err(e) = create_folder_structure_idempotent().await {
+        println!("Creating folder structure was unsuccessful");
+        return Err(e);
+    }
+
     println!();
     println!("Actions:");
     println!();
@@ -95,7 +101,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 false => input.as_str()
             };
             
-            if api_key.len() == 0 {
+            if api_key.is_empty() {
                 error!("No YouTube API key specified. Put your YouTube API key in the Carnister/youtube_api_key.txt file.");
                 exit(1);
             }
@@ -117,38 +123,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .with_key("eta", |state: &ProgressState, w: &mut dyn fmt::Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
                 .progress_chars("=>-"));
 
-            let mut progress_bar_pos = 0;
-
-            for video in videos {
+            for (progress_bar_pos, video) in videos.into_iter().enumerate() {
                 
-                pb.set_position(progress_bar_pos);
-                progress_bar_pos += 1;
-
-                // if progress_bar_pos < 25 {
-                //     continue;
-                // }
+                pb.set_position(progress_bar_pos as u64);
                 
                 let id = video["contentDetails"]["videoId"].to_string().trim_matches('\"').to_string();
                 let raw_title = video["snippet"]["title"].to_string().trim_matches('\"').to_string();
                 let upload_channel = video["snippet"]["videoOwnerChannelTitle"].to_string().trim_matches('\"').to_string();
                 let raw_upload_date = video["contentDetails"]["videoPublishedAt"].to_string().trim_matches('\"').to_string();
 
+                let mut tmp_upload_date = raw_upload_date.clone();
+                tmp_upload_date.truncate(raw_upload_date.find("-").unwrap());
                 
                 let title;
                 let artist;
-                let upload_date;
+                let upload_date = tmp_upload_date.parse::<i32>().unwrap();
 
-                let mut tmp_upload_date = raw_upload_date.clone();
-                tmp_upload_date.truncate(raw_upload_date.find("-").unwrap());
-                upload_date = tmp_upload_date.parse::<i32>().unwrap();
-
-                if raw_title.find(" - ") == None {
+                if !raw_title.contains(" - ") {
                     artist = clean_artist(&upload_channel.replace(" - Topic", ""));
                     title = clean_title(&raw_title);
                 } else {
                     let split_title: Vec<&str> = raw_title.split(" - ").collect();
-                    artist = clean_artist(&split_title[0].to_string());
-                    title = clean_title(&split_title[1].to_string());
+                    artist = clean_artist(split_title[0]);
+                    title = clean_title(split_title[1]);
                 }
 
                 tokio::time::sleep(Duration::from_millis(timeout)).await;
@@ -165,10 +162,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let song = Song{artist, title, release_year: year, youtube_year: upload_date, video_id: id, raw_title, detected_title: Some(detected_title)};
 
                 songs.push(song);
-
-                // if progress_bar_pos >= 35 {
-                //     break;
-                // }// rmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
             }
 
             pb.finish_with_message("All data received.");
@@ -190,8 +183,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         current += 1;
                         println!("{}{}{}", current.to_string().green(), "/".green(), total_skipped.to_string().green());
                         println!();
-                        println!("{} {}", "Youtube title: ", song.raw_title.bright_green());
-                        println!("{} {} - {}", "Queried title: ", song.artist.bright_green(), song.title.bright_green());
+                        println!("Youtube title:  {}", song.raw_title.bright_green());
+                        println!("Queried title:  {} - {}", song.artist.bright_green(), song.title.bright_green());
                         println!();
                         println!("Actions:");
                         println!("{} {}{}{}", "1".blue(), "Use YouTube upload date (".cyan(), song.youtube_year.to_string().blue(), ")".cyan());
@@ -288,7 +281,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("{}", page_str.green());
         let elements_displayed = draw_table(&songs, page, elements_per_page);
         println!();
-        println!("{}", "Actions:");
+        println!("Actions:");
         println!("{}", "Number to select element".cyan());
         println!("{}", "a/d to change page".cyan());
         println!("{}", "+/- to change number of elements per page".cyan());
@@ -304,11 +297,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                     let selected = songs.get_mut(((num - 1) + (page * elements_per_page)) as usize).unwrap();
                     println!("Selected:");
-                    println!("{} {} - {}", "Title for card: ", selected.artist.bright_green(), selected.title.bright_green());
+                    println!("Title for card:  {} - {}", selected.artist.bright_green(), selected.title.bright_green());
                     if let Some(title) = &selected.detected_title {
-                        println!("{} {}", "Detected title: ", title.bright_green());
+                        println!("Detected title:  {}", title.bright_green());
                     }
-                    println!("{} {}", "Year:           ", selected.release_year.to_string().bright_green());
+                    println!("Year:            {}", selected.release_year.to_string().bright_green());
                     println!();
                     println!("Actions:");
                     println!("{} {}", "1".blue(), "New query".cyan());
@@ -352,9 +345,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Err(_) => {
                 match input.as_str() {
                     "a" => {
-                        if page > 0 {
-                            page -= 1;
-                        }
+                        page = page.saturating_sub(1);
                     },
                     "d" => {
                         if page < page_count - 1 {
@@ -380,10 +371,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     info!("Saving List...");
 
-    let file_name = format!("song-list-{}", chrono::Local::now().format("%Y-%m-%d-%H:%M:%S").to_string());
+    let file_name = format!("song-list-{}", chrono::Local::now().format("%Y-%m-%d-%H:%M:%S"));
     let mut song_list_file = File::create(format!("./Carnister/song_lists/{}.txt", file_name))?;
     for song in &songs {
-        writeln!(song_list_file, "{}", song.to_string())?;
+        writeln!(song_list_file, "{}", song)?;
     }
 
     info!("Generating cards...");
@@ -427,7 +418,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn create_card_page(songs: &Vec<Song>, year_font: &Font, icon: &String, background_design: &String) -> (String, String) {
+async fn create_folder_structure_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all("./Carnister/song_lists").await?;
+    fs::create_dir_all("./Carnister/designs").await?;
+    fs::create_dir_all("./Carnister/output").await?;
+    if !fs::try_exists("./Carnister/youtube_api_key.txt").await? {
+        fs::write("./Carnister/youtube_api_key.txt", "").await?;
+    }
+    if !fs::try_exists("./Carnister/designs/design0.svg").await? {
+        fs::copy("./design0.svg", "./Carnister/designs/design0.svg").await?;
+    }
+    Ok(())
+}
+
+fn create_card_page(songs: &[Song], year_font: &Font, icon: &str, background_design: &str) -> (String, String) {
 
     const CARD_SIZE: u32 = 65; //in mm
 
@@ -484,7 +488,7 @@ fn parse_option_string(input: &str) -> Option<String> {
     None
 }
 
-fn create_card_front_svg_component(song: &Song, font: &Font, icon: &String, bg_design: &String) -> String {
+fn create_card_front_svg_component(song: &Song, font: &Font, icon: &str, bg_design: &str) -> String {
     
     let mut svg = Vec::new();
 
@@ -522,7 +526,7 @@ fn create_card_front_svg_component(song: &Song, font: &Font, icon: &String, bg_d
     let n10 = (song.release_year % 100 / 10) as usize;
     let n1 = (song.release_year % 10) as usize;
 
-    let wrong_id_bg = bg_design.clone().replace(&bg_replace_color1, &(detection_prefix.to_string() + number_colors[n10])).replace(&bg_replace_color2, &(detection_prefix.to_string() + number_colors[n1]));
+    let wrong_id_bg = bg_design.replace(&bg_replace_color1, &(detection_prefix.to_string() + number_colors[n10])).replace(&bg_replace_color2, &(detection_prefix.to_string() + number_colors[n1]));
     let mut bg = wrong_id_bg.clone();
     let gradient_starts: Vec<(usize, &str)> = wrong_id_bg.match_indices("id=\"").collect();
     for (index, _) in gradient_starts {
@@ -550,7 +554,7 @@ fn create_card_front_svg_component(song: &Song, font: &Font, icon: &String, bg_d
     svg.push("</svg>".into());
 
     svg.push("<svg x=\"3\" y=\"3\" width=\"10\" height=\"10\" viewBox=\"0 0 100 100\">".into());
-    svg.push(icon.clone());
+    svg.push(icon.to_owned());
     svg.push("</svg>".into());
 
     svg.push("</svg>".into());
@@ -565,7 +569,7 @@ async fn custom_query(client: &Client, song: &mut Song) -> Result<(), Box<dyn Er
     println!("Title:");
     print_input_arrow();
     let custom_query_title: String = read!("{}\n");
-    match get_music_braiz_results(&client, &custom_query_artist, &custom_query_title).await {
+    match get_music_braiz_results(client, &custom_query_artist, &custom_query_title).await {
         Ok(results) => {
             println!();
             for (index, (year, detected_title, disambiguation)) in results.iter().enumerate() {
@@ -589,7 +593,7 @@ async fn custom_query(client: &Client, song: &mut Song) -> Result<(), Box<dyn Er
     Ok(())
 }
 
-fn draw_table(elements: &Vec<Song>, page: u32, elements_per_page: u32) -> u32 {
+fn draw_table(elements: &[Song], page: u32, elements_per_page: u32) -> u32 {
 
     let longest_artist = elements.iter().map(|s| s.artist.len()).max().unwrap_or(0) as u32;
     let longest_title = elements.iter().map(|s| s.title.len()).max().unwrap_or(0) as u32;
@@ -679,23 +683,15 @@ fn draw_table(elements: &Vec<Song>, page: u32, elements_per_page: u32) -> u32 {
                         let artists: Vec<&str> = artist_split.split(", ").collect();
 
                         for det_artist in artists {
-                            match raw_detected_title.split_once(det_artist) {
-                                Some((left, right)) => {
-                                    if artist.to_lowercase().contains(det_artist.to_lowercase().as_str()) {
-                                        raw_detected_title = left.to_string() + &det_artist.green().to_string() + right;
-                                    }
-                                },
-                                None => (),
-                            }
-                        }
-                        match raw_detected_title.split_once(title_split) {
-                            Some((left, right)) => {
-                                if title.to_lowercase().contains(title_split.to_lowercase().as_str()) {
-                                    raw_detected_title = left.to_string() + &title_split.green().to_string() + right;
+                            if let Some((left, right)) = raw_detected_title.split_once(det_artist)
+                                && artist.to_lowercase().contains(det_artist.to_lowercase().as_str()) {
+                                    raw_detected_title = left.to_string() + &det_artist.green().to_string() + right;
                                 }
-                            },
-                            None => (),
                         }
+                        if let Some((left, right)) = raw_detected_title.split_once(title_split)
+                            && title.to_lowercase().contains(title_split.to_lowercase().as_str()) {
+                                raw_detected_title = left.to_string() + &title_split.green().to_string() + right;
+                            }
 
                         raw_detected_title.blue().to_string()
                     },
@@ -752,7 +748,7 @@ fn draw_table(elements: &Vec<Song>, page: u32, elements_per_page: u32) -> u32 {
     }
     println!("{}", "┘".truecolor(TABLE_R, TABLE_G, TABLE_B));
 
-    return displayed_songs_count;
+    displayed_songs_count
 
 }
 
@@ -770,14 +766,10 @@ fn input_num(range_min: i32, range_max: i32) -> i32 {
     loop {
         print_input_arrow();
         let raw_input: String = read!("{}\n");
-        match raw_input.parse::<i32>() {
-            Ok(i) => {
-                if i >= range_min && i <= range_max {
-                    return i;
-                }
-            },
-            Err(_) => ()
-        };
+        if let Ok(i) = raw_input.parse::<i32>()
+            && i >= range_min && i <= range_max {
+                return i;
+            };
     }
 }
 
@@ -870,7 +862,7 @@ async fn get_music_braiz_results(client: &Client, artist: &str, title: &str) -> 
 
 async fn receive_json(client: &Client, url: &str) -> Result<Value, Box<dyn std::error::Error>> {
 
-    let url_url = Url::parse(&url).expect(format!("Non valid url: {}", &url).as_str());
+    let url_url = Url::parse(url).unwrap_or_else(|_| panic!("Non valid url: {}", &url));
 
     let header = HeaderValue::from_str("Carnister/1.0 (https://github.com/Asecave/Carnister/issues)").unwrap();
     let response = client.get(url).header(USER_AGENT, header).send().await?;
@@ -891,20 +883,20 @@ async fn receive_json(client: &Client, url: &str) -> Result<Value, Box<dyn std::
     Ok(json)
 }
 
-fn clean_artist(input: &String) -> String {
+fn clean_artist(input: &str) -> String {
     let bracket_re = Regex::new(r"\[.*?\]").unwrap();
-    let mut temp = bracket_re.replace_all(&input, "").trim().to_string();
+    let mut temp = bracket_re.replace_all(input, "").trim().to_string();
     if let Some(index) = temp.find("-").or(temp.find("|")) {
         temp = temp.split_off(index);
     }
     temp.trim().to_string()
 }
 
-fn clean_title(input: &String) -> String {
+fn clean_title(input: &str) -> String {
     let bracket_re = Regex::new(r"\[.*?\]").unwrap();
     let remix_re = Regex::new(r"\([^)]*\)").unwrap();
     let other_re = Regex::new(r"\|.*").unwrap();
-    let temp = bracket_re.replace_all(input.as_str(), "").to_string();
+    let temp = bracket_re.replace_all(input, "").to_string();
     let temp = remix_re
         .replace_all(&temp, |caps: &regex::Captures| {
             let content = &caps[0].to_lowercase();
